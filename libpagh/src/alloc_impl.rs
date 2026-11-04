@@ -86,15 +86,23 @@ unsafe impl GlobalAlloc for Bump {
             };
             let target = page_end.max(chunk_end);
 
-            match sys::brk(target) {
-                // A kernel that returns a break below the requested end (or
-                // even below the old one) did not satisfy the contract; treat
-                // it as ENOMEM rather than hand out unmapped memory.
-                Ok(new_end) if new_end >= need_end => {
-                    state.end = new_end;
-                }
+            // Prefer a whole chunk, but retry with the exact page-rounded end
+            // if the larger request fails. The kernel heap window is finite
+            // (1 MiB in the current ABI implementation), and refusing a small
+            // allocation because the *chunk* would cross the top would waste
+            // the last 64 KiB.
+            let new_end = match sys::brk(target) {
+                Ok(new_end) if new_end >= need_end => new_end,
+                _ if target != page_end => match sys::brk(page_end) {
+                    Ok(new_end) if new_end >= need_end => new_end,
+                    // A kernel that returns a break below the requested end
+                    // (or below the old one) did not satisfy the contract;
+                    // treat it as ENOMEM rather than hand out unmapped memory.
+                    _ => return core::ptr::null_mut(),
+                },
                 _ => return core::ptr::null_mut(),
-            }
+            };
+            state.end = new_end;
         }
 
         state.cursor = need_end;

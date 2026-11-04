@@ -101,6 +101,18 @@ fn ptr_of(buf: &[u8]) -> usize {
     }
 }
 
+/// Like [`check`], but also refuses a byte count larger than the caller's
+/// buffer. A kernel that claims to have written past the buffer would make
+/// slicing panic; returning `EIO` keeps that a clean error.
+fn check_len(ret: isize, max: usize) -> Result<usize> {
+    let n = check(ret)?;
+    if n > max {
+        Err(Errno::EIO)
+    } else {
+        Ok(n)
+    }
+}
+
 /// NUL-terminate a path for `openat`/`readlinkat`.
 ///
 /// Interior NUL bytes are rejected with `EINVAL` before the syscall: silently
@@ -173,7 +185,7 @@ pub fn read(fd: i32, buf: &mut [u8]) -> Result<usize> {
             0,
         )
     };
-    check(ret)
+    check_len(ret, buf.len())
 }
 
 /// `write(2)`: write up to `buf.len()` bytes.
@@ -192,7 +204,7 @@ pub fn write(fd: i32, buf: &[u8]) -> Result<usize> {
             0,
         )
     };
-    check(ret)
+    check_len(ret, buf.len())
 }
 
 /// `openat(2)`: open `path` and return a file descriptor `>= 3`.
@@ -279,7 +291,7 @@ pub fn getdents64(fd: i32, buf: &mut [u8]) -> Result<usize> {
             0,
         )
     };
-    check(ret)
+    check_len(ret, buf.len())
 }
 
 /// `brk(2)`: set the program break to `addr` and return the new break.
@@ -373,7 +385,7 @@ pub fn readlinkat(dirfd: i32, path: &str, buf: &mut [u8]) -> Result<usize> {
             0,
         )
     };
-    check(ret)
+    check_len(ret, buf.len())
 }
 
 /// `getpid(2)`: the scheduler task id of the calling process.
