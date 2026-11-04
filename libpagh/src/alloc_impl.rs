@@ -110,7 +110,10 @@ unsafe impl GlobalAlloc for Bump {
     }
 
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
-        // Bump allocator: memory is reclaimed when the process exits.
+        // SAFETY: this method performs no memory operation at all. The
+        // `GlobalAlloc` contract only requires that the pointer is no longer
+        // used after this call; a bump allocator keeps the region mapped until
+        // the process exits, which trivially satisfies that.
     }
 }
 

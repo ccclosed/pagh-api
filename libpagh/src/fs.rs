@@ -74,6 +74,9 @@ impl File {
     /// `fd` must be open and owned by this process, and must not be closed or
     /// wrapped by another `File` while this value lives.
     pub unsafe fn from_raw_fd(fd: i32) -> File {
+        // SAFETY: constructing `File` performs no unsafe operation; the
+        // caller's guarantee (a live, owned descriptor) is documented above and
+        // is what makes the eventual `Drop`/I/O sound.
         File { fd }
     }
 }

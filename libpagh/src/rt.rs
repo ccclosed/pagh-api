@@ -40,6 +40,11 @@ unsafe impl Sync for NameBuf {}
 
 static NAME_BUF: NameBuf = NameBuf(UnsafeCell::new([0; NAME_CAP + 1]));
 
+// SAFETY: this declaration only names the symbol the program must provide
+// (`#[no_mangle] extern "C" fn main`). The kernel's entry contract guarantees
+// the stack layout and the lifetime of the pointers; `main` is called exactly
+// once, from `start`, before any other user code runs.
+//
 // The program's entry point, defined by the program itself as
 // `#[no_mangle] pub extern "C" fn main(...) -> i32`.
 unsafe extern "C" {
