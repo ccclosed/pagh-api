@@ -136,6 +136,12 @@ pub fn write(path: &str, contents: &[u8]) -> Result<()> {
     file.write_all(contents)
 }
 
+/// Alias for [`write`], matching the name used by the rest of the API
+/// (`io::Write::write_all`).
+pub fn write_all(path: &str, contents: &[u8]) -> Result<()> {
+    write(path, contents)
+}
+
 /// Metadata for `path` (`openat` + `fstat` + `close`).
 ///
 /// Returns [`Errno::EPERM`] if the kernel does not allow opening the target
@@ -159,6 +165,9 @@ pub fn read_link(path: &str) -> Result<String> {
     loop {
         let mut buf = vec![0u8; capacity];
         let n = sys::readlinkat(sys::AT_FDCWD, &absolute, &mut buf)?;
+        if n > buf.len() {
+            return Err(Errno::EIO);
+        }
         if n < capacity {
             buf.truncate(n);
             return Ok(String::from_utf8_lossy(&buf).into_owned());
