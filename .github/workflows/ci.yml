@@ -1,0 +1,15 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: |
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal --target riscv64gc-unknown-none-elf
+      - name: Build libpagh and the hello example
+        run: ./build.sh
+      - name: ABI drift check (docs/abi.md vs syscall wrappers)
+        run: python3 tools/check_abi.py
