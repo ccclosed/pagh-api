@@ -1,0 +1,11 @@
+# `pagh-user.ld` lives at the workspace root. Cargo runs rustc with the
+# workspace root as the working directory, so the linker script is named
+# relatively and the checkout stays relocatable.
+[build]
+target = "riscv64gc-unknown-none-elf"
+
+[target.riscv64gc-unknown-none-elf]
+rustflags = [
+    "-C", "link-arg=-Tpagh-user.ld",
+    "-C", "linker=rust-lld",
+]

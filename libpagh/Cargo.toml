@@ -1,0 +1,13 @@
+[package]
+name = "libpagh"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Native no_std userland API for the pagh-riscv kernel"
+
+[lib]
+crate-type = ["rlib"]
+path = "src/lib.rs"
+[[example]]
+name = "hello"
+path = "../examples/hello.rs"

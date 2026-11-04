@@ -1,0 +1,6 @@
+# The same pinned nightly the kernel (`pagh-riscv`) uses, so a userland ELF and
+# the kernel that loads it are built by one compiler. The precompiled `core`
+# for the bare-metal RISC-V target ships with this toolchain.
+[toolchain]
+channel = "nightly-2026-07-12"
+targets = ["riscv64gc-unknown-none-elf"]
