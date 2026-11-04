@@ -99,7 +99,7 @@ libpagh = { path = "../pagh-api/libpagh" }
 | `abi` | `Stat` (24 B), `Timespec` (16 B), `Uname` (80 B), `EntryKind`, `Dirent`-константы; размеры проверяются `const assert` |
 | `errno` | 19 errno из ABI + `Errno::Unknown` для дрейфа; `Display` с текстами для CLI |
 | `io` | `Read`/`Write`/`Seek`, `Stdin`/`Stdout`/`Stderr`, `copy`, `SeekFrom` |
-| `fs` | `File::open/create/open_with`, `read_to_end`, `read_to_string`, `write`, `stat`, `read_link`, `Dir`/`DirEntry` поверх `getdents64` |
+| `fs` | `File::open/create/open_with`, `read_to_end`, `read_to_string`, `write`/`write_all`, `stat`, `read_link`, `Dir`/`DirEntry` поверх `getdents64` |
 | `path` | `normalize`, `resolve` (относительно `PWD`), `join`, `basename`, `dirname`, `Path` |
 | `env` | `args()` (включая `argv[0]`), `vars()`, `var("PWD")`, `current_dir()`, `program_name()` |
 | `alloc` | bump-аллокатор на `brk`: работают `Vec`, `String`, `format!` |
