@@ -60,6 +60,17 @@ impl File {
         self.fd
     }
 
+    /// Resize the file to `length` bytes (`ftruncate`).
+    ///
+    /// Shrinking releases the trailing blocks; growing fills the gap with
+    /// zeroes (the kernel writes them, so a later read never sees stale data).
+    /// The descriptor must be open for writing and the file must be a regular
+    /// file, or the kernel answers `EBADF`/`EISDIR`. The open offset is not
+    /// moved, as POSIX requires.
+    pub fn set_len(&self, length: u64) -> Result<()> {
+        sys::ftruncate(self.fd, length)
+    }
+
     /// Give up ownership of the descriptor; the caller must close it.
     pub fn into_raw_fd(mut self) -> i32 {
         let fd = self.fd;
@@ -143,6 +154,123 @@ pub fn write(path: &str, contents: &[u8]) -> Result<()> {
 /// (`io::Write::write_all`).
 pub fn write_all(path: &str, contents: &[u8]) -> Result<()> {
     write(path, contents)
+}
+
+
+// ---------------------------------------------------------------------------
+// Directory and metadata mutations
+// ---------------------------------------------------------------------------
+
+/// Create the directory `path` (mode `0o777`, which the kernel ignores — see
+/// [`set_permissions`]). An existing entry is `EEXIST`.
+///
+/// `path` is resolved against `PWD`; the kernel accepts absolute paths only.
+pub fn create_dir(path: &str) -> Result<()> {
+    let absolute = path::resolve(path);
+    sys::mkdirat(sys::AT_FDCWD, &absolute, 0o777)
+}
+
+/// Create `path` and any missing parent directories.
+///
+/// Components are created left to right. An existing component is accepted only
+/// if it is a directory ([`stat`] decides), so a regular file in the way is
+/// reported as `EEXIST` instead of being silently skipped. `/` alone is a
+/// no-op.
+pub fn create_dir_all(path: &str) -> Result<()> {
+    let absolute = path::resolve(path);
+    if absolute == "/" {
+        return Ok(());
+    }
+    let mut prefix = String::new();
+    for component in absolute.split('/').filter(|component| !component.is_empty()) {
+        prefix.push('/');
+        prefix.push_str(component);
+        match create_dir(&prefix) {
+            Ok(()) => {}
+            Err(Errno::EEXIST) => {
+                if !stat(&prefix)?.is_dir() {
+                    return Err(Errno::EEXIST);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// Remove the file or symbolic link `path` (`unlink`).
+///
+/// A directory is `EISDIR`: removing one requires [`remove_dir`]. A relative
+/// path resolves against `PWD`.
+pub fn remove_file(path: &str) -> Result<()> {
+    let absolute = path::resolve(path);
+    sys::unlinkat(sys::AT_FDCWD, &absolute, 0)
+}
+
+/// Remove the **empty** directory `path` (`rmdir`).
+///
+/// A non-empty directory is `ENOTEMPTY`; a file is `ENOTDIR`. Remove the
+/// children first ([`Dir`] lists them, [`remove_file`]/[`remove_dir`] remove
+/// them recursively as the applet chooses).
+pub fn remove_dir(path: &str) -> Result<()> {
+    let absolute = path::resolve(path);
+    sys::unlinkat(sys::AT_FDCWD, &absolute, sys::AT_REMOVEDIR)
+}
+
+/// Rename or move `from` to `to` (`renameat2`, flags 0).
+///
+/// Both paths resolve against `PWD`. The kernel performs the move in one
+/// filesystem transaction; a destination on another filesystem is `ENOTSUP`
+/// (copying is not renaming), and a directory may only replace an empty one.
+pub fn rename(from: &str, to: &str) -> Result<()> {
+    let from = path::resolve(from);
+    let to = path::resolve(to);
+    sys::renameat2(sys::AT_FDCWD, &from, sys::AT_FDCWD, &to, 0)
+}
+
+/// Create `new` as a hard link to the existing file `existing`.
+///
+/// Both paths resolve against `PWD`; a directory target is `EISDIR`, and a
+/// target on another filesystem is `ENOTSUP`. After success both names refer to
+/// the same inode and the same data; removing one leaves the other intact.
+pub fn hard_link(existing: &str, new: &str) -> Result<()> {
+    let existing = path::resolve(existing);
+    let new = path::resolve(new);
+    sys::linkat(sys::AT_FDCWD, &existing, sys::AT_FDCWD, &new, 0)
+}
+
+/// Create a symbolic link at `link_path` whose target is `target`.
+///
+/// **`target` is stored verbatim and is not resolved against `PWD`** — that is
+/// the point of a symbolic link. A relative target is later interpreted
+/// relative to the directory that contains the link; pass the absolute path if
+/// the link should point there regardless of where it is read. `link_path` is
+/// resolved against `PWD`.
+pub fn symlink(target: &str, link_path: &str) -> Result<()> {
+    let link = path::resolve(link_path);
+    sys::symlinkat(target, sys::AT_FDCWD, &link)
+}
+
+/// Resize the regular file at `path` to `length` bytes.
+///
+/// Opens the file for writing and calls `ftruncate`, so the caller needs no
+/// descriptor. See [`File::set_len`] for the semantics.
+pub fn truncate(path: &str, length: u64) -> Result<()> {
+    let file = File::open_with(path, sys::O_WRONLY, 0)?;
+    file.set_len(length)
+}
+
+/// Set the permission bits of `path` to `mode & 0o7777` (`fchmodat`).
+///
+/// **The current kernel does not persist modes.** `VfsNode` has no `set_mode`,
+/// so the kernel records the bits for the rest of the run and `fstat` reports
+/// them; nothing is written to the ext2 inode, no access check consults the
+/// value, and the next program sees the on-disk mode again. A synthetic node
+/// (the root `/`) answers `ENOTSUP`. This is documented, not hidden: callers
+/// that need durable permissions have no ABI for them yet.
+pub fn set_permissions(path: &str, mode: u32) -> Result<()> {
+    let absolute = path::resolve(path);
+    sys::fchmodat(sys::AT_FDCWD, &absolute, mode, 0)
 }
 
 /// Metadata for `path` (`openat` + `fstat` + `close`).

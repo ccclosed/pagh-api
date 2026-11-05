@@ -8,7 +8,7 @@ runs without a network or a cross toolchain:
     and no `SYS_*` constant exists that the doc does not list;
   * every errno in doc §3 has an `Errno` variant with the same discriminant,
     and no variant (other than `Unknown`, the drift marker) is undocumented;
-  * every `O_*` flag in doc §2 matches `libpagh/src/sys.rs`;
+  * every `O_*`/`AT_*` flag in doc §2 matches `libpagh/src/sys.rs`;
   * the documented `Stat`/`Timespec`/`Uname` sizes match the compile-time
     assertions in `libpagh/src/abi.rs`.
 
@@ -81,7 +81,9 @@ def documented_flags(doc: str) -> dict[str, int]:
     end = text.find("\n\n", start)
     paragraph = text[start:] if end < 0 else text[start:end]
     found: dict[str, int] = {}
-    for name, value in re.findall(r"`(O_[A-Z0-9_]+)=(0x[0-9A-Fa-f]+|\d+)`", paragraph):
+    for name, value in re.findall(
+        r"`((?:O|AT)_[A-Z0-9_]+)=(0x[0-9A-Fa-f]+|\d+)`", paragraph
+    ):
         found[name] = int(value, 0)
     if not found:
         raise SystemExit("check_abi: no O_* flags parsed from docs/abi.md")
@@ -115,7 +117,7 @@ def rust_flags(source: str) -> dict[str, int]:
     return {
         name: int(number, 0)
         for name, number in re.findall(
-            r"pub const (O_[A-Z0-9_]+): u32 = (0x[0-9A-Fa-f]+|\d+);", source
+            r"pub const ((?:O|AT)_[A-Z0-9_]+): u32 = (0x[0-9A-Fa-f]+|\d+);", source
         )
     }
 
@@ -196,6 +198,16 @@ def main() -> int:
         "getpid": 172,
         "sched_yield": 124,
         "exit": 93,
+        # The file-mutation family (native-mut). Additive to the first-port
+        # table above; docs, libpagh and the kernel dispatch share these
+        # numbers.
+        "mkdirat": 34,
+        "unlinkat": 35,
+        "symlinkat": 36,
+        "linkat": 37,
+        "fchmodat": 53,
+        "ftruncate": 46,
+        "renameat2": 276,
     }
     if doc_sys != expected:
         errors.append(

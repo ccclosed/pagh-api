@@ -9,8 +9,8 @@
 ```
 docs/abi.md          замороженный контракт (источник истины)
 pagh-user.ld         раскладка ELF: база 0x10000, _start в .text.entry, R+X / R+W
-libpagh/src/sys.rs   15 ecall-обёрток + номера/флаги
-libpagh/src/errno.rs Errno (19 значений из ABI) и Result<T>
+libpagh/src/sys.rs   22 ecall-обёртки + номера/флаги
+libpagh/src/errno.rs Errno (20 значений из ABI) и Result<T>
 libpagh/src/abi.rs   Stat/Timespec/Uname/EntryKind, проверка размеров
 libpagh/src/rt.rs    _start, разбор argc/argv/envp, паника
 libpagh/src/alloc_impl.rs  bump-аллокатор на brk
@@ -95,11 +95,11 @@ libpagh = { path = "../pagh-api/libpagh" }
 
 | Модуль | Что даёт |
 |---|---|
-| `sys` | `read write openat close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat getpid sched_yield exit`; все, кроме `exit`, возвращают `Result<T, Errno>`; незнакомый ядру номер даёт `ENOSYS` |
+| `sys` | `read write openat close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat getpid sched_yield exit` + `mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate`; все, кроме `exit`, возвращают `Result<T, Errno>`; незнакомый ядру номер даёт `ENOSYS` |
 | `abi` | `Stat` (24 B), `Timespec` (16 B), `Uname` (80 B), `EntryKind`, `Dirent`-константы; размеры проверяются `const assert` |
 | `errno` | 19 errno из ABI + `Errno::Unknown` для дрейфа; `Display` с текстами для CLI |
 | `io` | `Read`/`Write`/`Seek`, `Stdin`/`Stdout`/`Stderr`, `copy`, `SeekFrom` |
-| `fs` | `File::open/create/open_with`, `read_to_end`, `read_to_string`, `write`/`write_all`, `stat`, `read_link`, `Dir`/`DirEntry` поверх `getdents64` |
+| `fs` | `File::open/create/open_with`, `File::set_len`, `read_to_end`, `read_to_string`, `write`/`write_all`, `create_dir`/`create_dir_all`, `remove_file`/`remove_dir`, `rename`, `hard_link`, `symlink`, `truncate` (по пути), `set_permissions`, `stat`, `read_link`, `Dir`/`DirEntry` поверх `getdents64` |
 | `path` | `normalize`, `resolve` (относительно `PWD`), `join`, `basename`, `dirname`, `Path` |
 | `env` | `args()` (включая `argv[0]`), `vars()`, `var("PWD")`, `current_dir()`, `program_name()` |
 | `alloc` | bump-аллокатор на `brk`: работают `Vec`, `String`, `format!` |
@@ -140,9 +140,13 @@ CLI-процесса, а не универсальный malloc.
 ## Чего нет
 
 Ни потоков, ни `fork`, ни сигналов, ни сокетов, ни `mmap`, ни `poll`, ни
-динамического линкера, ни `auxv`/TLS, ни libc, ни `std`. Нет и файловых
-операций, которых нет в ABI: `rename`, `unlink`, `mkdir`, `chmod` и т. п.
-появятся только вместе с syscall'ами ядра.
+динамического линкера, ни `auxv`/TLS, ни libc, ни `std`. Файловые мутации есть:
+`mkdirat`/`unlinkat`/`symlinkat`/`linkat`/`renameat2`/`fchmodat`/`ftruncate`
+(номера 34–37, 53, 46, 276) и обёртки `fs::create_dir`, `remove_file`,
+`remove_dir`, `rename`, `hard_link`, `symlink`, `truncate`, `set_permissions`,
+`File::set_len`. Чего по-прежнему нет: `chown`, `utimes`, `O_EXCL`/`O_DIRECTORY`,
+`AT_SYMLINK_NOFOLLOW`, жёстких ссылок на каталог и **долговременного** `chmod` —
+режим живёт только до конца прогона (см. ниже).
 
 ## Осознанные решения и открытые вопросы ABI
 
@@ -181,15 +185,30 @@ CLI-процесса, а не универсальный malloc.
     длиннее 255 байт + NUL (`PATH_CAPACITY = 256`). `path::resolve` длинных
     путей не обрезает: syscall вернёт `ENAMETOOLONG`, программа напечатает
     ошибку. Это ограничение ядра, а не скрытый truncate.
-12. **`mode` при `O_CREAT`.** ABI говорит, что mode применяется; текущее ядро
-    его игнорирует (ext2 создаёт 0o644). `File::create` передаёт `0o666` и не
-    полагается на права, поэтому поведение не меняется, но обещание ABI
-    расходится с реализацией.
+12. **`mode` при `O_CREAT` и `mkdirat`.** ABI говорит, что mode применяется;
+    текущее ядро его игнорирует (ext2 создаёт 0o644/0o755): в VFS нет
+    `set_mode`. `File::create` передаёт `0o666` и не полагается на права.
+13. **`chmod` не сохраняется.** `fchmodat` записывает `mode & 0o7777` в таблицу
+    прогона, и `fstat` показывает новые биты до конца программы; в inode они не
+    пишутся, права ни на что не влияют, следующий процесс видит диск снова.
+    Это задокументированный компромисс (в VFS ядра нет `set_mode`), а не
+    обещание persistence. На синтетическом узле (корень `/`) — `ENOTSUP`.
+14. **`unlinkat` и `linkat` не разыменовывают последнюю ссылку.** `rm link`
+    удаляет саму ссылку, а `linkat` создаёт жёсткую ссылку на неё; `fchmodat`,
+    наоборот, идёт по ссылке, как `chmod`. `AT_SYMLINK_NOFOLLOW` в ABI нет:
+    ненулевые неизвестные флаги — `EINVAL`, а не тихий игнор.
 
 ## Статус ядра (на момент коммита)
 
-Ветка `native-abi` рабочего дерева Lead'а уже отвечает на все 15 syscall'ов
-этого контракта (плюс свой selftest). Но проверка в QEMU на срезе
+Ветка `native-mut` (`pagh-riscv-mut`, база 0.10.1) отвечает на все 22 syscall'а
+этого контракта. Встроенная ABI-фикстура проходит целиком (`abi: mutations ok`,
+`abi: ok`), `selftest` с диском даёт `SELFTEST SUMMARY (user): 10/10 passed`,
+без `/mnt` — `8/10 passed, 2 skipped` (no-fs половина и mutation-половина
+работают независимо). Ниже — историческая сводка по более старому срезу
+`native-abi`; перечисленные в ней баги на `native-mut` не воспроизводятся.
+
+Старая сводка: ветка `native-abi` рабочего дерева Lead'а уже отвечала на 15
+syscall'ов этого контракта. Но проверка в QEMU на срезе
 `1ce872f` + незакоммиченные правки упёрлась в баги **ядра**, не в `libpagh`:
 
 * encoder `getdents64` считает `record_len = 8 + align8(name_len)`, хотя имя
@@ -216,7 +235,7 @@ applet'ов успешно отработали на временной 2-segmen
 
 ```sh
 python3 tools/check_abi.py
-# ABI check OK: 15 syscalls, 19 errnos, 6 open flags, 3 struct sizes
+# ABI check OK: 22 syscalls, 20 errnos, 7 open flags, 3 struct sizes
 ```
 
 Скрипт читает `docs/abi.md`, парсит таблицу syscall'ов, секцию ошибок, флаги

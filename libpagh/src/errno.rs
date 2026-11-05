@@ -46,6 +46,8 @@ pub enum Errno {
     EROFS = 30,
     /// Function not implemented.
     ENOSYS = 38,
+    /// Directory not empty (`rmdir` on a directory that still has entries).
+    ENOTEMPTY = 39,
     /// File name too long.
     ENAMETOOLONG = 36,
     /// Too many levels of symbolic links.
@@ -82,6 +84,7 @@ impl Errno {
             28 => Self::ENOSPC,
             30 => Self::EROFS,
             38 => Self::ENOSYS,
+            39 => Self::ENOTEMPTY,
             36 => Self::ENAMETOOLONG,
             40 => Self::ELOOP,
             75 => Self::EOVERFLOW,
@@ -116,6 +119,7 @@ impl Errno {
             Self::ENOSPC => "No space left on device",
             Self::EROFS => "Read-only filesystem",
             Self::ENOSYS => "Function not implemented",
+            Self::ENOTEMPTY => "Directory not empty",
             Self::ENAMETOOLONG => "File name too long",
             Self::ELOOP => "Too many levels of symbolic links",
             Self::EOVERFLOW => "Value too large for the data type",
@@ -161,7 +165,9 @@ mod tests {
 
     #[test]
     fn round_trips_documented_numbers() {
-        for raw in [1, 2, 5, 9, 11, 12, 13, 14, 17, 20, 21, 22, 28, 30, 38, 36, 40, 75, 95] {
+        for raw in [
+            1, 2, 5, 9, 11, 12, 13, 14, 17, 20, 21, 22, 28, 30, 38, 39, 36, 40, 75, 95,
+        ] {
             assert_eq!(Errno::from_raw(raw).raw(), raw);
         }
     }

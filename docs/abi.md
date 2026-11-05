@@ -53,10 +53,41 @@ current user address space; a bad pointer returns `-EFAULT` and never faults.
 | 172 | `getpid` | — | pid |
 | 124 | `sched_yield` | — | 0 |
 | 93 | `exit` | `code` | does not return |
+| 34 | `mkdirat` | `dirfd` (ignored), `path`, `mode` (ignored; see below) | 0; `-EEXIST`, `-ENOENT`, `-ENOTDIR` |
+| 35 | `unlinkat` | `dirfd` (ignored), `path`, `flags` | 0; `-EISDIR` (directory without `AT_REMOVEDIR`), `-ENOTDIR` (`AT_REMOVEDIR` on a file), `-ENOTEMPTY` (non-empty directory), `-EINVAL` (unknown flag bit) |
+| 36 | `symlinkat` | `target` (raw, **not** resolved), `dirfd` (ignored), `path` | 0; `-EEXIST`, `-EINVAL` (empty target) |
+| 37 | `linkat` | `olddirfd`, `oldpath`, `newdirfd`, `newpath`, `flags` (must be 0) | 0; `-EEXIST`, `-EISDIR` (directory target), `-ENOTSUP` (foreign filesystem) |
+| 276 | `renameat2` | `olddirfd`, `oldpath`, `newdirfd`, `newpath`, `flags` (must be 0) | 0; `-EEXIST`, `-ENOENT`, `-ENOTEMPTY`, `-EISDIR`, `-ENOTSUP` |
+| 53 | `fchmodat` | `dirfd` (ignored), `path`, `mode` (`& 0o7777`), `flags` (must be 0) | 0; mode is per-run and visible to `fstat`, not persisted; `-ENOTSUP` on a synthetic node |
+| 46 | `ftruncate` | `fd`, `length` | 0; `-EINVAL` for fd 0/1/2, `-EBADF` (read-only fd), `-EISDIR` |
 
 Maximum open files per process: **16**, including 0/1/2. fd 0 = console input,
 1 = console output, 2 = console diagnostics (all three are the same UART/screen;
 `read(0)` also drains the virtio-keyboard).
+
+### Directory mutations
+
+`mkdirat`, `unlinkat`, `symlinkat`, `linkat`, `renameat2`, `fchmodat` and
+`ftruncate` change the tree. All paths are absolute UTF-8 strings (≤ 255 bytes
+plus the NUL), all `dirfd` arguments are ignored, and a `flags` argument the
+kernel does not implement must be 0 — it is `-EINVAL`, not ignored. The final
+path component is never followed by `unlinkat`/`linkat` (removing or linking a
+symbolic link acts on the link itself); `fchmodat` follows it, like `chmod`.
+Every mutation is one filesystem transaction, so a failed call leaves the tree
+as it was; the file-descriptor table is not modified except by `openat`.
+
+`mkdirat`'s `mode` and the `mode` argument of `openat(O_CREAT)` are accepted and
+**ignored**: the VFS has no `set_mode`, so ext2's defaults (`0o644` file,
+`0o755` directory, `0o777` symlink) stand. `fchmodat` narrows the gap for the
+current run: the kernel records `mode & 0o7777` keyed by inode and `fstat`
+reports it until the program exits. It is **not** written to the inode, not
+consulted by any access check, and not visible to the next program — a
+`chmod` applet can report what `stat` says in the same run, and must not promise
+persistence. `fchmodat` on a synthetic node (the root) is `-ENOTSUP`.
+
+`ftruncate` requires a writable regular-file descriptor: 0/1/2 are `-EINVAL`,
+a directory `-EISDIR`, a descriptor opened read-only `-EBADF`. Growing fills the
+new range with zeroes; the open offset does not move.
 
 ### Structures (native, little-endian, no padding surprises)
 
@@ -76,14 +107,15 @@ struct Dirent { uint64 ino; uint8 kind; uint8 name_len; uint16 reserved;
 ```
 
 Flags: `O_RDONLY=0`, `O_WRONLY=1`, `O_RDWR=2`, `O_CREAT=0x40`,
-`O_TRUNC=0x80`, `O_APPEND=0x100`. `mode` on `openat` is applied only with
-`O_CREAT` (subject to the kernel's umask).
+`O_TRUNC=0x80`, `O_APPEND=0x100`; `AT_REMOVEDIR=0x200` (the `unlinkat` flag).
+`mode` on `openat` is applied only with `O_CREAT` and is currently ignored (see
+"Directory mutations").
 
 ## 3. Errors
 
 `EPERM=1 ENOENT=2 EIO=5 EBADF=9 EAGAIN=11 ENOMEM=12 EACCES=13 EFAULT=14
 EEXIST=17 ENOTDIR=20 EISDIR=21 EINVAL=22 ENOSPC=28 EROFS=30 ENOSYS=38
-ENAMETOOLONG=36 ELOOP=40 EOVERFLOW=75 ENOTSUP=95`.
+ENOTEMPTY=39 ENAMETOOLONG=36 ELOOP=40 EOVERFLOW=75 ENOTSUP=95`.
 
 ## 4. Runtime (`libpagh`)
 
@@ -91,7 +123,9 @@ ENAMETOOLONG=36 ELOOP=40 EOVERFLOW=75 ENOTSUP=95`.
   `extern "C" fn main(argc: i32, argv: *const *const u8, envp: *const *const u8) -> i32`.
 * `alloc`: a bump allocator on `brk`; `alloc::vec::Vec`, `String`, `format!` work.
 * `print!`/`println!` write to fd 1; `eprint!` to fd 2.
-* `fs`: `File::open`, `File::create`, `read_to_end`, `read_to_string`, `write_all`,
+* `fs`: `File::open`, `File::create`, `File::set_len`, `read_to_end`,
+  `read_to_string`, `write_all`, `create_dir`, `create_dir_all`, `remove_file`,
+  `remove_dir`, `rename`, `hard_link`, `symlink`, `truncate`, `set_permissions`,
   `Dir::open`, iterator over `DirEntry`/`EntryKind`, `fs::read_link`, `fs::stat`.
 * `env`: `args()` (with `argv[0]`), `env("PWD")`, `path::resolve` for relative paths.
 * `io`: `Read`, `Write`, `Seek` traits and `Stdin`, `Stdout`.
@@ -107,7 +141,9 @@ under `/mnt/bin/` and creates command symlinks. Packages are independent of apt.
 
 ## 6. Compatibility and versioning
 
-`libpagh` and the kernel ABI are versioned together: `base_version = 1`. Adding a
-syscall or struct field is an ABI bump; the kernel keeps answering `-ENOSYS` for
-numbers it does not know, so an old runtime fails with a clear error instead of
-crashing.
+`libpagh` and the kernel ABI are versioned together: `base_version = 1`. A
+breaking change to an existing number, struct or flag is an ABI bump; this
+branch's file-mutation family is additive (seven new numbers, no changed field,
+no changed flag), so the base version stays 1. The kernel keeps answering
+`-ENOSYS` for numbers it does not know, so a program built against this table
+fails with a clear error on an older kernel instead of crashing.

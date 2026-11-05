@@ -48,6 +48,20 @@ pub const SYS_GETPID: usize = 172;
 pub const SYS_SCHED_YIELD: usize = 124;
 /// `exit(code)`.
 pub const SYS_EXIT: usize = 93;
+/// `mkdirat(dirfd, path, mode)`.
+pub const SYS_MKDIRAT: usize = 34;
+/// `unlinkat(dirfd, path, flags)`.
+pub const SYS_UNLINKAT: usize = 35;
+/// `symlinkat(target, dirfd, path)`.
+pub const SYS_SYMLINKAT: usize = 36;
+/// `linkat(olddirfd, oldpath, newdirfd, newpath, flags)`.
+pub const SYS_LINKAT: usize = 37;
+/// `fchmodat(dirfd, path, mode, flags)`.
+pub const SYS_FCHMODAT: usize = 53;
+/// `ftruncate(fd, length)`.
+pub const SYS_FTRUNCATE: usize = 46;
+/// `renameat2(olddirfd, oldpath, newdirfd, newpath, flags)`.
+pub const SYS_RENAMEAT2: usize = 276;
 
 // ---------------------------------------------------------------------------
 // openat flags and lseek whence (frozen)
@@ -65,6 +79,9 @@ pub const O_CREAT: u32 = 0x40;
 pub const O_TRUNC: u32 = 0x80;
 /// `openat` flag: append writes at the end.
 pub const O_APPEND: u32 = 0x100;
+
+/// `unlinkat` flag: remove an empty directory instead of a file.
+pub const AT_REMOVEDIR: u32 = 0x200;
 
 /// `lseek(…, SEEK_SET)`.
 pub const SEEK_SET: u32 = 0;
@@ -386,6 +403,186 @@ pub fn readlinkat(dirfd: i32, path: &str, buf: &mut [u8]) -> Result<usize> {
         )
     };
     check_len(ret, buf.len())
+}
+
+
+/// `mkdirat(2)`: create the directory `path` (absolute; resolved against `PWD`).
+///
+/// `dirfd` is ignored by the ABI; [`AT_FDCWD`] is passed as the documented
+/// placeholder. `mode` is accepted and **ignored** by the current kernel: the
+/// VFS has no `set_mode`, so the filesystem default (ext2 `0o755`) stands.
+/// [`crate::fs::set_permissions`] records an observable per-run override, but
+/// nothing writes the on-disk permission bits.
+pub fn mkdirat(dirfd: i32, path: &str, mode: u32) -> Result<()> {
+    let path = c_path(path)?;
+    // SAFETY: `path` is a live NUL-terminated byte vector; the rest are plain
+    // integers. The kernel validates the path pointer.
+    let ret = unsafe {
+        syscall6(
+            SYS_MKDIRAT,
+            dirfd as isize as usize,
+            path.as_ptr() as usize,
+            mode as usize,
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}
+
+/// `unlinkat(2)`: remove a file or symbolic link (`flags = 0`), or an empty
+/// directory (`flags = AT_REMOVEDIR`).
+///
+/// A directory without `AT_REMOVEDIR` is `EISDIR`; a non-empty one with it is
+/// `ENOTEMPTY`; any other flag bit is `EINVAL`.
+pub fn unlinkat(dirfd: i32, path: &str, flags: u32) -> Result<()> {
+    let path = c_path(path)?;
+    // SAFETY: `path` is a live NUL-terminated byte vector; the kernel validates
+    // the pointer.
+    let ret = unsafe {
+        syscall6(
+            SYS_UNLINKAT,
+            dirfd as isize as usize,
+            path.as_ptr() as usize,
+            flags as usize,
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}
+
+/// `symlinkat(2)`: create the symbolic link `path` whose target is `target`.
+///
+/// The target is stored verbatim, not resolved here: a relative target is
+/// interpreted later relative to the directory that contains the link. Note the
+/// argument order: Linux's `symlinkat(target, newdirfd, linkpath)`, mirrored by
+/// this ABI.
+pub fn symlinkat(target: &str, dirfd: i32, path: &str) -> Result<()> {
+    let target = c_path(target)?;
+    let path = c_path(path)?;
+    // SAFETY: both are live NUL-terminated byte vectors; the kernel validates
+    // both pointers.
+    let ret = unsafe {
+        syscall6(
+            SYS_SYMLINKAT,
+            target.as_ptr() as usize,
+            dirfd as isize as usize,
+            path.as_ptr() as usize,
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}
+
+/// `linkat(2)`: create `newpath` as another name for `oldpath`'s inode.
+///
+/// `flags` must be 0; both dirfds are ignored. A directory target is `EISDIR`
+/// (ext2 has no directory hard links). The link and its target must live on the
+/// same filesystem, or the VFS answers `ENOTSUP`.
+pub fn linkat(
+    olddirfd: i32,
+    oldpath: &str,
+    newdirfd: i32,
+    newpath: &str,
+    flags: u32,
+) -> Result<()> {
+    let oldpath = c_path(oldpath)?;
+    let newpath = c_path(newpath)?;
+    // SAFETY: both are live NUL-terminated byte vectors; the kernel validates
+    // both pointers.
+    let ret = unsafe {
+        syscall6(
+            SYS_LINKAT,
+            olddirfd as isize as usize,
+            oldpath.as_ptr() as usize,
+            newdirfd as isize as usize,
+            newpath.as_ptr() as usize,
+            flags as usize,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}
+
+/// `renameat2(2)`: move `oldpath` to `newpath`.
+///
+/// `flags` must be 0 (no `RENAME_NOREPLACE`/`RENAME_EXCHANGE` in this ABI).
+/// Because `/mnt` is the only mount, a rename into `/` is `ENOTSUP` — copying
+/// is not renaming.
+pub fn renameat2(
+    olddirfd: i32,
+    oldpath: &str,
+    newdirfd: i32,
+    newpath: &str,
+    flags: u32,
+) -> Result<()> {
+    let oldpath = c_path(oldpath)?;
+    let newpath = c_path(newpath)?;
+    // SAFETY: both are live NUL-terminated byte vectors; the kernel validates
+    // both pointers.
+    let ret = unsafe {
+        syscall6(
+            SYS_RENAMEAT2,
+            olddirfd as isize as usize,
+            oldpath.as_ptr() as usize,
+            newdirfd as isize as usize,
+            newpath.as_ptr() as usize,
+            flags as usize,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}
+
+/// `fchmodat(2)`: set the permission bits of `path` to `mode & 0o7777`.
+///
+/// The current kernel has no writable mode in the VFS: it records the bits for
+/// the rest of the **run** and `fstat` reports them; nothing is written to the
+/// ext2 inode and no access check consults the value. A synthetic node (the
+/// root `/`) has no inode and answers `ENOTSUP`. `flags` must be 0
+/// (`AT_SYMLINK_NOFOLLOW` is not part of this ABI).
+pub fn fchmodat(dirfd: i32, path: &str, mode: u32, flags: u32) -> Result<()> {
+    let path = c_path(path)?;
+    // SAFETY: `path` is a live NUL-terminated byte vector; the kernel validates
+    // the pointer.
+    let ret = unsafe {
+        syscall6(
+            SYS_FCHMODAT,
+            dirfd as isize as usize,
+            path.as_ptr() as usize,
+            mode as usize,
+            flags as usize,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}
+
+/// `ftruncate(2)`: resize the open regular file behind `fd` to `length` bytes.
+///
+/// Grows with zeroes and shrinks by releasing blocks. Console descriptors are
+/// `EINVAL`, a directory is `EISDIR`, and a descriptor opened read-only is
+/// `EBADF` (see [`crate::fs::truncate`] and [`crate::fs::File::set_len`]).
+pub fn ftruncate(fd: i32, length: u64) -> Result<()> {
+    // SAFETY: no pointer arguments; the kernel validates the descriptor.
+    let ret = unsafe {
+        syscall6(
+            SYS_FTRUNCATE,
+            fd as isize as usize,
+            length as usize,
+            0,
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
 }
 
 /// `getpid(2)`: the scheduler task id of the calling process.
