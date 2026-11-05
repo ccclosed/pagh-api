@@ -11,7 +11,7 @@
 
 use alloc::vec::Vec;
 
-use crate::abi::{Stat, Timespec, Uname};
+use crate::abi::{SockAddrIn, Stat, Timespec, Uname};
 use crate::errno::{check, Errno, Result};
 
 // ---------------------------------------------------------------------------
@@ -62,6 +62,22 @@ pub const SYS_FCHMODAT: usize = 53;
 pub const SYS_FTRUNCATE: usize = 46;
 /// `renameat2(olddirfd, oldpath, newdirfd, newpath, flags)`.
 pub const SYS_RENAMEAT2: usize = 276;
+/// `socket(domain, type, protocol)`.
+pub const SYS_SOCKET: usize = 198;
+/// `connect(fd, *sockaddr_in, addrlen)`.
+pub const SYS_CONNECT: usize = 203;
+/// `sendto(fd, buf, len, flags, dest, addrlen)` (the `send` shape on a
+/// connected socket).
+pub const SYS_SENDTO: usize = 206;
+/// `recvfrom(fd, buf, len, flags, src, addrlen)` (the `recv` shape on a
+/// connected socket).
+pub const SYS_RECVFROM: usize = 207;
+/// `setsockopt(fd, level, optname, optval, optlen)`.
+pub const SYS_SETSOCKOPT: usize = 208;
+/// `getsockopt(fd, level, optname, optval, optlen)`.
+pub const SYS_GETSOCKOPT: usize = 209;
+/// `shutdown(fd, how)`.
+pub const SYS_SHUTDOWN: usize = 210;
 
 // ---------------------------------------------------------------------------
 // openat flags and lseek whence (frozen)
@@ -582,6 +598,127 @@ pub fn ftruncate(fd: i32, length: u64) -> Result<()> {
             0,
         )
     };
+    check(ret).map(|_| ())
+}
+
+// ---------------------------------------------------------------------------
+// BSD sockets (AF_INET / SOCK_STREAM only; see docs/abi.md §2)
+// ---------------------------------------------------------------------------
+
+/// `AF_INET`: the only address family the kernel accepts.
+pub const AF_INET: u16 = crate::abi::AF_INET;
+/// `SOCK_STREAM`: the only socket type the kernel accepts.
+pub const SOCK_STREAM: u32 = crate::abi::SOCK_STREAM;
+/// `shutdown`: no further receives.
+pub const SHUT_RD: u32 = 0;
+/// `shutdown`: no further sends.
+pub const SHUT_WR: u32 = 1;
+/// `shutdown`: both directions.
+pub const SHUT_RDWR: u32 = 2;
+
+/// `socket(domain, type, protocol)`: create a BSD socket descriptor.
+///
+/// The kernel has one TCP connection, so at most one socket descriptor exists
+/// per run: a second call while the first is open is `ENOSPC`. The only
+/// supported combination is `AF_INET` / `SOCK_STREAM` / protocol 0; anything
+/// else is `EAFNOSUPPORT` (the kernel documents one answer rather than
+/// inventing per-field errnos).
+pub fn socket(domain: u16, kind: u32, protocol: u32) -> Result<i32> {
+    // SAFETY: all arguments are plain integers; no pointers.
+    let ret = unsafe {
+        syscall6(
+            SYS_SOCKET,
+            domain as usize,
+            kind as usize,
+            protocol as usize,
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|fd| fd as i32)
+}
+
+/// `connect(fd, *sockaddr_in, sizeof(sockaddr_in))`.
+///
+/// IPv4 literals only: this ABI has no DNS resolver and no `getaddrinfo`. The
+/// kernel validates the 16-byte structure (family, address, port) before it
+/// sends a SYN and polls until the handshake completes or its own deadline
+/// expires (`ETIMEDOUT`).
+pub fn connect(fd: i32, address: &SockAddrIn) -> Result<()> {
+    // SAFETY: `address` is a live, correctly aligned `SockAddrIn` for the call;
+    // the kernel copies exactly 16 bytes and validates the family.
+    let ret = unsafe {
+        syscall6(
+            SYS_CONNECT,
+            fd as isize as usize,
+            address as *const SockAddrIn as usize,
+            core::mem::size_of::<SockAddrIn>(),
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}
+
+/// `send` on a connected socket: the `sendto` wire shape with no destination.
+///
+/// TCP's send is synchronous in the kernel (it waits for the acknowledgement
+/// with a bounded poll), so a successful return means the bytes left this
+/// machine. A peer close is `EPIPE`, a reset `ECONNRESET`, a stalled peer
+/// `ETIMEDOUT`.
+pub fn send(fd: i32, buf: &[u8]) -> Result<usize> {
+    // SAFETY: `buf` is a live shared slice; the kernel only reads it and
+    // validates the range. No destination address is passed on a connected
+    // socket.
+    let ret = unsafe {
+        syscall6(
+            SYS_SENDTO,
+            fd as isize as usize,
+            ptr_of(buf),
+            buf.len(),
+            0,
+            0,
+            0,
+        )
+    };
+    check_len(ret, buf.len())
+}
+
+/// `recv` on a connected socket: the `recvfrom` wire shape with no source
+/// address.
+///
+/// **Non-blocking**: `EAGAIN` means no payload is queued yet and the caller
+/// should poll again (the same contract as `read(0)`); `0` means the peer
+/// closed. IPv4 literals only, like [`connect`].
+pub fn recv(fd: i32, buf: &mut [u8]) -> Result<usize> {
+    // SAFETY: `buf` is a live writable slice for the duration of the call; the
+    // kernel validates every page and writes at most `buf.len()` bytes.
+    let ret = unsafe {
+        syscall6(
+            SYS_RECVFROM,
+            fd as isize as usize,
+            ptr_of(buf),
+            buf.len(),
+            0,
+            0,
+            0,
+        )
+    };
+    check_len(ret, buf.len())
+}
+
+/// `shutdown(fd, how)`: close the connection while keeping the descriptor.
+///
+/// The kernel has no half-close: `how` is validated (`SHUT_RD`, `SHUT_WR`,
+/// `SHUT_RDWR`) but both directions close. A later `recv` returns `Ok(0)` (end
+/// of stream) and a later `send` is `EPIPE`; [`crate::sys::close`] releases the
+/// descriptor.
+pub fn shutdown(fd: i32, how: u32) -> Result<()> {
+    // SAFETY: no pointer arguments; the kernel validates the descriptor and
+    // the `how` value.
+    let ret = unsafe { syscall6(SYS_SHUTDOWN, fd as isize as usize, how as usize, 0, 0, 0, 0) };
     check(ret).map(|_| ())
 }
 

@@ -46,8 +46,30 @@ pub enum Errno {
     EROFS = 30,
     /// Function not implemented.
     ENOSYS = 38,
+    /// Broken pipe: a write on a socket whose peer has closed.
+    EPIPE = 32,
     /// Directory not empty (`rmdir` on a directory that still has entries).
     ENOTEMPTY = 39,
+    /// A socket operation on a non-socket descriptor.
+    ENOTSOCK = 88,
+    /// Protocol option not recognized.
+    ENOPROTOOPT = 92,
+    /// Address family not supported (the ABI has only `AF_INET`).
+    EAFNOSUPPORT = 97,
+    /// Network is unreachable (no DHCP lease or no route).
+    ENETUNREACH = 101,
+    /// Connection reset by peer.
+    ECONNRESET = 104,
+    /// Socket is already connected.
+    EISCONN = 106,
+    /// Socket is not connected.
+    ENOTCONN = 107,
+    /// Connection timed out.
+    ETIMEDOUT = 110,
+    /// Connection refused (the peer sent a RST during the handshake).
+    ECONNREFUSED = 111,
+    /// No route to the host (ARP failed).
+    EHOSTUNREACH = 113,
     /// File name too long.
     ENAMETOOLONG = 36,
     /// Too many levels of symbolic links.
@@ -85,6 +107,17 @@ impl Errno {
             30 => Self::EROFS,
             38 => Self::ENOSYS,
             39 => Self::ENOTEMPTY,
+            32 => Self::EPIPE,
+            88 => Self::ENOTSOCK,
+            92 => Self::ENOPROTOOPT,
+            97 => Self::EAFNOSUPPORT,
+            101 => Self::ENETUNREACH,
+            104 => Self::ECONNRESET,
+            106 => Self::EISCONN,
+            107 => Self::ENOTCONN,
+            110 => Self::ETIMEDOUT,
+            111 => Self::ECONNREFUSED,
+            113 => Self::EHOSTUNREACH,
             36 => Self::ENAMETOOLONG,
             40 => Self::ELOOP,
             75 => Self::EOVERFLOW,
@@ -120,6 +153,17 @@ impl Errno {
             Self::EROFS => "Read-only filesystem",
             Self::ENOSYS => "Function not implemented",
             Self::ENOTEMPTY => "Directory not empty",
+            Self::EPIPE => "Broken pipe",
+            Self::ENOTSOCK => "Socket operation on non-socket",
+            Self::ENOPROTOOPT => "Protocol option not available",
+            Self::EAFNOSUPPORT => "Address family not supported",
+            Self::ENETUNREACH => "Network is unreachable",
+            Self::ECONNRESET => "Connection reset by peer",
+            Self::EISCONN => "Transport endpoint is already connected",
+            Self::ENOTCONN => "Transport endpoint is not connected",
+            Self::ETIMEDOUT => "Connection timed out",
+            Self::ECONNREFUSED => "Connection refused",
+            Self::EHOSTUNREACH => "No route to host",
             Self::ENAMETOOLONG => "File name too long",
             Self::ELOOP => "Too many levels of symbolic links",
             Self::EOVERFLOW => "Value too large for the data type",
@@ -166,7 +210,8 @@ mod tests {
     #[test]
     fn round_trips_documented_numbers() {
         for raw in [
-            1, 2, 5, 9, 11, 12, 13, 14, 17, 20, 21, 22, 28, 30, 38, 39, 36, 40, 75, 95,
+            1, 2, 5, 9, 11, 12, 13, 14, 17, 20, 21, 22, 28, 30, 38, 39, 36, 40, 75, 95, 32, 88, 92,
+            97, 101, 104, 106, 107, 110, 111, 113,
         ] {
             assert_eq!(Errno::from_raw(raw).raw(), raw);
         }

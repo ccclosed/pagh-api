@@ -60,10 +60,22 @@ current user address space; a bad pointer returns `-EFAULT` and never faults.
 | 276 | `renameat2` | `olddirfd`, `oldpath`, `newdirfd`, `newpath`, `flags` (must be 0) | 0; `-EEXIST`, `-ENOENT`, `-ENOTEMPTY`, `-EISDIR`, `-ENOTSUP` |
 | 53 | `fchmodat` | `dirfd` (ignored), `path`, `mode` (`& 0o7777`), `flags` (must be 0) | 0; mode is per-run and visible to `fstat`, not persisted; `-ENOTSUP` on a synthetic node |
 | 46 | `ftruncate` | `fd`, `length` | 0; `-EINVAL` for fd 0/1/2, `-EBADF` (read-only fd), `-EISDIR` |
+| 198 | `socket` | `domain` (`AF_INET=2`), `type` (`SOCK_STREAM=1`), `protocol` (0) | fd ≥ 3; `-EAFNOSUPPORT` for any other combination; a second socket while one is open is `-ENOSPC` |
+| 203 | `connect` | `fd`, `*SockAddrIn`, `addrlen` (must be 16) | 0; `-EINVAL`, `-EAFNOSUPPORT`, `-ENOTSOCK`, `-EISCONN`, `-ENETUNREACH`, `-EHOSTUNREACH`, `-ECONNREFUSED`, `-ETIMEDOUT`, `-EAGAIN` |
+| 206 | `sendto` | `fd`, `buf`, `len`, `flags` (must be 0), `dest` (0, or validated and ignored on a connected socket), `addrlen` | bytes sent; `-ENOTCONN`, `-EPIPE`, `-ECONNRESET`, `-ETIMEDOUT`; the `send` shape |
+| 207 | `recvfrom` | `fd`, `buf`, `len`, `flags` (must be 0), `src` (0, or filled with the peer), `*addrlen` | bytes; **`-EAGAIN` when nothing is queued yet** (poll again), 0 = peer closed; the `recv` shape |
+| 208 | `setsockopt` | `fd`, `level`, `optname`, `optval`, `optlen` | 0 for `SO_REUSEADDR`, `SO_KEEPALIVE`, `SO_RCVTIMEO`, `SO_SNDTIMEO`, `TCP_NODELAY` (validated and ignored); `-ENOPROTOOPT` otherwise |
+| 209 | `getsockopt` | `fd`, `level`, `optname`, `optval`, `*optlen` | 0 for `SO_TYPE` (`SOCK_STREAM`), `SO_ERROR` (0), `SO_RCVTIMEO`/`SO_SNDTIMEO` (0), `TCP_NODELAY` (0); `-ENOPROTOOPT` otherwise |
+| 210 | `shutdown` | `fd`, `how` (0 read, 1 write, 2 both) | 0; both directions close (no half-close), the descriptor stays open: later `read` is 0, `write` is `-EPIPE` |
 
 Maximum open files per process: **16**, including 0/1/2. fd 0 = console input,
 1 = console output, 2 = console diagnostics (all three are the same UART/screen;
 `read(0)` also drains the virtio-keyboard).
+
+On a socket descriptor, `read` is `recv` with `flags = 0`, `write` is `send`
+with `flags = 0`, and `close` closes the TCP connection and releases the
+descriptor. `lseek`/`ftruncate` answer `-EINVAL`, `fstat` reports
+`kind = OTHER` like the console.
 
 ### Directory mutations
 
@@ -101,6 +113,12 @@ struct Stat {            // 24 bytes
 struct Timespec { int64 seconds; int64 nanos; };          // 16 bytes
 struct Uname { char sysname[16]; char nodename[16]; char release[16];
                char version[16]; char machine[16]; };     // 80 bytes
+struct SockAddrIn {      // 16 bytes, native BSD layout
+    uint16_t family;     // AF_INET=2, little-endian
+    uint16_t port;       // network byte order (send port.to_be())
+    uint8_t  address[4]; // IPv4 octets, wire order
+    uint8_t  zero[8];    // padding, ignored by the kernel
+};
 // getdents64 entry: one record per directory entry, 8-byte aligned:
 struct Dirent { uint64 ino; uint8 kind; uint8 name_len; uint16 reserved;
                 char name[name_len]; /* then padding to 8 */ };
@@ -111,11 +129,57 @@ Flags: `O_RDONLY=0`, `O_WRONLY=1`, `O_RDWR=2`, `O_CREAT=0x40`,
 `mode` on `openat` is applied only with `O_CREAT` and is currently ignored (see
 "Directory mutations").
 
+Socket constants: `AF_INET=2`, `SOCK_STREAM=1`, `SHUT_RD=0`, `SHUT_WR=1`,
+`SHUT_RDWR=2`; `SOL_SOCKET=1`, `IPPROTO_TCP=6`, `SO_REUSEADDR=2`, `SO_TYPE=3`,
+`SO_ERROR=4`, `SO_KEEPALIVE=9`, `SO_RCVTIMEO=20`, `SO_SNDTIMEO=21`,
+`TCP_NODELAY=1`.
+
+### BSD sockets
+
+The kernel implements one **active-open IPv4 TCP client**, so the socket ABI is
+deliberately one connection wide:
+
+* `AF_INET` + `SOCK_STREAM` + protocol 0 only. A second `socket()` while a
+  socket descriptor is open is `-ENOSPC`; `close` frees the slot, and the next
+  `socket()` gets a fresh local port.
+* `connect` takes a 16-byte `SockAddrIn`; the kernel validates the user range,
+  the exact length, the family, and reads the port big-endian. **IPv4 literals
+  only** — there is no `getaddrinfo`, DNS syscall or `/etc/hosts` in this layer.
+  `connect` polls the NIC until the handshake completes or the TCP client's own
+  deadline fires; it returns only after success or a mapped errno.
+* `send`/`sendto` are synchronous: the kernel waits for the peer's
+  acknowledgement, polling the NIC, and a completed call means the bytes left
+  the machine. `write` on a socket is the same path. `flags` must be 0; a
+  non-zero `dest` is validated and ignored (the stream is already connected).
+* `recv`/`recvfrom` are **non-blocking**: `-EAGAIN` means "nothing queued yet,
+  call again", and 0 means the peer closed. `read` on a socket is the same path.
+  A finite `src` is filled with the peer address and `*addrlen` is set to 16.
+* `shutdown` closes both directions (no `SHUT_WR` half-close): later reads
+  return 0 and later writes `-EPIPE`; the descriptor stays open until `close`.
+* `setsockopt` accepts the common BSD options and ignores them (the kernel's
+  bounds are fixed); `getsockopt` reports `SO_TYPE = SOCK_STREAM` and zero for
+  the rest. Unknown level/option is `-ENOPROTOOPT`, never silently accepted.
+* `bind`, `listen`, `accept`, `socketpair`, UDP (`SOCK_DGRAM`), IPv6, `poll`/
+  `select`, `sendmsg`/`recvmsg` and TLS are **not implemented**; their numbers
+  are unknown to the kernel and answer `-ENOSYS`.
+* The kernel state happens to survive a program exit, but a run ends by closing
+  any socket the program left open: the descriptor table is per run, and the
+  next program starts with no connection.
+* `connect` errno mapping: no DHCP lease → `-ENETUNREACH`; ARP/no route →
+  `-EHOSTUNREACH`; peer RST during the handshake → `-ECONNREFUSED`; its deadline
+  → `-ETIMEDOUT`; an already-connected descriptor → `-EISCONN`. After a reset or
+  a peer FIN, `send` is `-EPIPE`/`-ECONNRESET` and `recv` returns 0 at EOF.
+* The one connection is shared with the kernel's own HTTP client (`http`,
+  `pkg`); a program cannot hold it while a shell command uses it, and one
+  program runs at a time.
+
 ## 3. Errors
 
 `EPERM=1 ENOENT=2 EIO=5 EBADF=9 EAGAIN=11 ENOMEM=12 EACCES=13 EFAULT=14
-EEXIST=17 ENOTDIR=20 EISDIR=21 EINVAL=22 ENOSPC=28 EROFS=30 ENOSYS=38
-ENOTEMPTY=39 ENAMETOOLONG=36 ELOOP=40 EOVERFLOW=75 ENOTSUP=95`.
+EEXIST=17 ENOTDIR=20 EISDIR=21 EINVAL=22 ENOSPC=28 EROFS=30 EPIPE=32
+ENOSYS=38 ENOTEMPTY=39 ENAMETOOLONG=36 ELOOP=40 EOVERFLOW=75 ENOTSOCK=88
+ENOPROTOOPT=92 ENOTSUP=95 EAFNOSUPPORT=97 ENETUNREACH=101 ECONNRESET=104
+EISCONN=106 ENOTCONN=107 ETIMEDOUT=110 ECONNREFUSED=111 EHOSTUNREACH=113`.
 
 ## 4. Runtime (`libpagh`)
 
@@ -129,8 +193,11 @@ ENOTEMPTY=39 ENAMETOOLONG=36 ELOOP=40 EOVERFLOW=75 ENOTSUP=95`.
   `Dir::open`, iterator over `DirEntry`/`EntryKind`, `fs::read_link`, `fs::stat`.
 * `env`: `args()` (with `argv[0]`), `env("PWD")`, `path::resolve` for relative paths.
 * `io`: `Read`, `Write`, `Seek` traits and `Stdin`, `Stdout`.
+* `net`: `Ipv4` (literal, `Ipv4::parse`) and `TcpStream::connect(host, port)`
+  with `Read`/`Write` (non-blocking `read`: retry on `EAGAIN`), `read_to_end`
+  and `shutdown`. No listener, UDP, DNS or TLS; see the socket subsection above.
 * Panics print `program: panic at <loc>` to fd 2 and `exit(101)`; no unwinding.
-* One process at a time: no threads, fork, signals, sockets, mmap, dynamic linking.
+* One process at a time: no threads, fork, signals, mmap, poll/select or dynamic linking; the one socket family is the connected IPv4 TCP client above.
 
 ## 5. Program pack format (`pagh-programs`)
 
@@ -143,7 +210,8 @@ under `/mnt/bin/` and creates command symlinks. Packages are independent of apt.
 
 `libpagh` and the kernel ABI are versioned together: `base_version = 1`. A
 breaking change to an existing number, struct or flag is an ABI bump; this
-branch's file-mutation family is additive (seven new numbers, no changed field,
-no changed flag), so the base version stays 1. The kernel keeps answering
+file-mutation family and this socket family are additive (seven plus seven new
+numbers, no changed field or flag on an existing call), so the base version
+stays 1. The kernel keeps answering
 `-ENOSYS` for numbers it does not know, so a program built against this table
 fails with a clear error on an older kernel instead of crashing.

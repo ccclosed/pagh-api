@@ -9,7 +9,7 @@ runs without a network or a cross toolchain:
   * every errno in doc §3 has an `Errno` variant with the same discriminant,
     and no variant (other than `Unknown`, the drift marker) is undocumented;
   * every `O_*`/`AT_*` flag in doc §2 matches `libpagh/src/sys.rs`;
-  * the documented `Stat`/`Timespec`/`Uname` sizes match the compile-time
+  * the documented `Stat`/`Timespec`/`Uname`/`SockAddrIn` sizes match the compile-time
     assertions in `libpagh/src/abi.rs`.
 
 Exit code 0 on agreement, 1 on any drift, 2 when a file/pattern is missing
@@ -124,7 +124,7 @@ def rust_flags(source: str) -> dict[str, int]:
 
 def rust_struct_sizes(source: str) -> dict[str, int]:
     # Only the ABI structs; primitive-width asserts are not ABI struct sizes.
-    wanted = {"Stat", "Timespec", "Uname"}
+    wanted = {"Stat", "Timespec", "Uname", "SockAddrIn"}
     return {
         name: int(size)
         for name, size in re.findall(
@@ -136,7 +136,7 @@ def rust_struct_sizes(source: str) -> dict[str, int]:
 
 def documented_struct_sizes(doc: str) -> dict[str, int]:
     sizes: dict[str, int] = {}
-    for name in ("Stat", "Timespec", "Uname"):
+    for name in ("Stat", "Timespec", "Uname", "SockAddrIn"):
         match = re.search(
             rf"struct\s+{name}\b.*?//\s*(\d+)\s+bytes", doc, re.S
         )
@@ -208,6 +208,15 @@ def main() -> int:
         "fchmodat": 53,
         "ftruncate": 46,
         "renameat2": 276,
+        # The BSD-socket subset (native-sock). Additive as well: one connected
+        # AF_INET/SOCK_STREAM socket, no listener, UDP or DNS.
+        "socket": 198,
+        "connect": 203,
+        "sendto": 206,
+        "recvfrom": 207,
+        "setsockopt": 208,
+        "getsockopt": 209,
+        "shutdown": 210,
     }
     if doc_sys != expected:
         errors.append(

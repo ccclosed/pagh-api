@@ -24,8 +24,10 @@
 //!
 //! # Not provided
 //!
-//! No threads, fork, signals, sockets, mmap, poll or dynamic linking. See
-//! `docs/abi.md` §4 and the README's "What is not supported" list.
+//! No threads, fork, signals, mmap, `poll` or dynamic linking. The one
+//! socket family is a connected IPv4 TCP client ([`net::TcpStream`]); there is
+//! no listening socket, UDP, DNS or TLS. See `docs/abi.md` §2/§4 and the
+//! README's "What is not supported" list.
 //!
 //! Every `unsafe` block carries a `SAFETY:` comment; the small number of them
 //! is intentional.
@@ -42,12 +44,13 @@ pub mod env;
 pub mod errno;
 pub mod fs;
 pub mod io;
+pub mod net;
 pub mod path;
 pub mod print;
 mod rt;
 pub mod sys;
 
-pub use abi::{EntryKind, Stat, Timespec, Uname};
+pub use abi::{EntryKind, SockAddrIn, Stat, Timespec, Uname};
 pub use errno::{Errno, Result};
 
 /// Print to standard output (fd 1).

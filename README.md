@@ -9,17 +9,19 @@
 ```
 docs/abi.md          замороженный контракт (источник истины)
 pagh-user.ld         раскладка ELF: база 0x10000, _start в .text.entry, R+X / R+W
-libpagh/src/sys.rs   22 ecall-обёртки + номера/флаги
-libpagh/src/errno.rs Errno (20 значений из ABI) и Result<T>
+libpagh/src/sys.rs   29 ecall-обёрток + номера/флаги
+libpagh/src/errno.rs Errno (31 значение из ABI) и Result<T>
 libpagh/src/abi.rs   Stat/Timespec/Uname/EntryKind, проверка размеров
 libpagh/src/rt.rs    _start, разбор argc/argv/envp, паника
 libpagh/src/alloc_impl.rs  bump-аллокатор на brk
 libpagh/src/io.rs    Read/Write/Seek, Stdin/Stdout/Stderr
 libpagh/src/fs.rs    File, Dir/DirEntry, stat, read_link
+libpagh/src/net.rs   Ipv4, TcpStream (один активный TCP-клиент, без listener'а)
 libpagh/src/path.rs  normalize/resolve относительно PWD
 libpagh/src/env.rs   args(), var(), current_dir()
 libpagh/src/print.rs print!/println!/eprintln!
 examples/hello.rs    пример программы
+examples/http_get.rs HTTP/1.0 GET на 10.0.2.2:8000 (нативный сокет)
 tools/check_abi.py   сверка чисел в docs/abi.md с sys.rs/errno.rs/abi.rs
 ```
 
@@ -33,12 +35,19 @@ tools/check_abi.py   сверка чисел в docs/abi.md с sys.rs/errno.rs/a
 ```sh
 cargo build --release --target riscv64gc-unknown-none-elf   # rlib libpagh
 ./build.sh                                                   # ELF examples/hello
+rustup run nightly-2026-07-12 cargo build --release \
+    --example http_get --target riscv64gc-unknown-none-elf   # ELF examples/http_get
 python3 tools/check_abi.py                                   # дрейф ABI
 ```
 
 `build.sh` печатает точную команду сборки и путь к статическому ELF
 (`target/riscv64gc-unknown-none-elf/release/examples/hello`), который ядро
 запускает через `run <path>`.
+
+`examples/http_get.rs` — живой сокетный пример: `TcpStream::connect` к
+`10.0.2.2:8000` (QEMU user network), HTTP/1.0 `GET /`, печать ответа до EOF.
+Его прогоняет `tools/test_sockets.py` из репозитория ядра; адрес — литерал,
+потому что DNS в ABI нет.
 
 `pagh-user.ld` повторяет `pagh-riscv/userland/user.ld`: образ начинается с
 `0x1_0000`, `_start` лежит первым в `.text.entry`, `.text`/`.rodata` дают
@@ -95,10 +104,11 @@ libpagh = { path = "../pagh-api/libpagh" }
 
 | Модуль | Что даёт |
 |---|---|
-| `sys` | `read write openat close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat getpid sched_yield exit` + `mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate`; все, кроме `exit`, возвращают `Result<T, Errno>`; незнакомый ядру номер даёт `ENOSYS` |
-| `abi` | `Stat` (24 B), `Timespec` (16 B), `Uname` (80 B), `EntryKind`, `Dirent`-константы; размеры проверяются `const assert` |
-| `errno` | 19 errno из ABI + `Errno::Unknown` для дрейфа; `Display` с текстами для CLI |
+| `sys` | `read write openat close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat getpid sched_yield exit` + `mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate` + `socket connect send recv shutdown`; все, кроме `exit`, возвращают `Result<T, Errno>`; незнакомый ядру номер даёт `ENOSYS` |
+| `abi` | `Stat` (24 B), `Timespec` (16 B), `Uname` (80 B), `SockAddrIn` (16 B), `EntryKind`, `Dirent`-константы; размеры проверяются `const assert` |
+| `errno` | 31 errno из ABI + `Errno::Unknown` для дрейфа; `Display` с текстами для CLI |
 | `io` | `Read`/`Write`/`Seek`, `Stdin`/`Stdout`/`Stderr`, `copy`, `SeekFrom` |
+| `net` | `Ipv4` (литерал и `Ipv4::parse`), `TcpStream::connect(host, port)`, `Read`/`Write` (неблокирующий `read`: `EAGAIN` → повтор), `read_to_end`, `shutdown`; только IPv4-литералы, одно соединение, без `TcpListener`/UDP/DNS/TLS |
 | `fs` | `File::open/create/open_with`, `File::set_len`, `read_to_end`, `read_to_string`, `write`/`write_all`, `create_dir`/`create_dir_all`, `remove_file`/`remove_dir`, `rename`, `hard_link`, `symlink`, `truncate` (по пути), `set_permissions`, `stat`, `read_link`, `Dir`/`DirEntry` поверх `getdents64` |
 | `path` | `normalize`, `resolve` (относительно `PWD`), `join`, `basename`, `dirname`, `Path` |
 | `env` | `args()` (включая `argv[0]`), `vars()`, `var("PWD")`, `current_dir()`, `program_name()` |
@@ -106,8 +116,10 @@ libpagh = { path = "../pagh-api/libpagh" }
 | `print` | `print! println! eprint! eprintln!` |
 
 Ошибки не паникуют: `main` сам решает, что печатать и с каким кодом выходить.
-`EAGAIN` не ретраится внутри `Read`: это сигнал «на fd 0 пока нет байта»,
-и прикладной код делает `sched_yield` и повторяет (см. ниже).
+`EAGAIN` не ретраится внутри `Read`: это сигнал «на fd 0 пока нет байта»
+(и «на сокете пока нет данных»), и прикладной код делает `sched_yield` и
+повторяет (см. ниже). Исключение — `TcpStream::read_to_end`: он сам крутит
+этот цикл до EOF.
 
 ## Память
 
@@ -139,7 +151,7 @@ CLI-процесса, а не универсальный malloc.
 
 ## Чего нет
 
-Ни потоков, ни `fork`, ни сигналов, ни сокетов, ни `mmap`, ни `poll`, ни
+Ни потоков, ни `fork`, ни сигналов, ни `mmap`, ни `poll`, ни
 динамического линкера, ни `auxv`/TLS, ни libc, ни `std`. Файловые мутации есть:
 `mkdirat`/`unlinkat`/`symlinkat`/`linkat`/`renameat2`/`fchmodat`/`ftruncate`
 (номера 34–37, 53, 46, 276) и обёртки `fs::create_dir`, `remove_file`,
@@ -147,6 +159,14 @@ CLI-процесса, а не универсальный malloc.
 `File::set_len`. Чего по-прежнему нет: `chown`, `utimes`, `O_EXCL`/`O_DIRECTORY`,
 `AT_SYMLINK_NOFOLLOW`, жёстких ссылок на каталог и **долговременного** `chmod` —
 режим живёт только до конца прогона (см. ниже).
+
+Сокеты есть ровно в объёме одного **активного** TCP-клиента: `AF_INET` +
+`SOCK_STREAM`, `connect` по IPv4-литералу, `send`/`recv`, `shutdown`. Нет
+`bind`/`listen`/`accept`, UDP, IPv6, DNS/`getaddrinfo`, `poll`/`select`,
+`sendmsg`/`recvmsg` и TLS; второе соединение одновременно невозможно.
+`recv` неблокирующий (`EAGAIN` — повторить), `shutdown` закрывает оба
+направления, `setsockopt` для типовых `SO_*`/`TCP_NODELAY` принимается и
+игнорируется.
 
 ## Осознанные решения и открытые вопросы ABI
 
@@ -198,10 +218,22 @@ CLI-процесса, а не универсальный malloc.
     наоборот, идёт по ссылке, как `chmod`. `AT_SYMLINK_NOFOLLOW` в ABI нет:
     ненулевые неизвестные флаги — `EINVAL`, а не тихий игнор.
 
+15. **Сокеты — один TCP-клиент.** `connect` принимает только `sockaddr_in`
+    (16 байт) с IPv4-литералом; DNS-а нет. `recv` неблокирующий по контракту
+    `read(0)`: `EAGAIN` — это «пока нет данных», 0 — EOF. `shutdown` не имеет
+    half-close: оба направления закрываются, дескриптор остаётся открытым
+    (чтение → 0, запись → `EPIPE`) до `close`. Второй `socket()` при открытом
+    первом — `ENOSPC`, потому что у ядра одно соединение; это записано в
+    `docs/abi.md`.
+16. **Номера `setsockopt`/`getsockopt`.** В generic RISC-V таблице это 208/209;
+    200/201 — это `bind`/`listen`, которых в ABI нет. `tools/check_abi.py`
+    сверяет таблицу с `sys.rs`, так что «200/201» не могли бы пройти проверку.
+
 ## Статус ядра (на момент коммита)
 
-Ветка `native-mut` (`pagh-riscv-mut`, база 0.10.1) отвечает на все 22 syscall'а
-этого контракта. Встроенная ABI-фикстура проходит целиком (`abi: mutations ok`,
+Ветка `native-mut` (`pagh-riscv-mut`, база 0.10.1) отвечает на 22 базовых и
+файловых syscall'а этого контракта; ветка `native-sock` добавляет семь
+сокетных (всего 29) и живой HTTP-тест. Встроенная ABI-фикстура проходит целиком (`abi: mutations ok`,
 `abi: ok`), `selftest` с диском даёт `SELFTEST SUMMARY (user): 10/10 passed`,
 без `/mnt` — `8/10 passed, 2 skipped` (no-fs половина и mutation-половина
 работают независимо). Ниже — историческая сводка по более старому срезу
@@ -235,7 +267,7 @@ applet'ов успешно отработали на временной 2-segmen
 
 ```sh
 python3 tools/check_abi.py
-# ABI check OK: 22 syscalls, 20 errnos, 7 open flags, 3 struct sizes
+# ABI check OK: 29 syscalls, 31 errnos, 7 open flags, 4 struct sizes
 ```
 
 Скрипт читает `docs/abi.md`, парсит таблицу syscall'ов, секцию ошибок, флаги

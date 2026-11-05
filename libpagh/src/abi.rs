@@ -146,6 +146,58 @@ impl Uname {
     }
 }
 
+/// `AF_INET`: the only address family this ABI has.
+pub const AF_INET: u16 = 2;
+
+/// `SOCK_STREAM`: the only socket type this ABI has.
+pub const SOCK_STREAM: u32 = 1;
+
+/// `struct sockaddr_in` — 16 bytes, the native BSD layout.
+///
+/// `family` is a little-endian `u16` (`AF_INET`); `port` is stored in **network
+/// byte order** in the low two bytes of a `u16` (the `htons` convention, so on
+/// this little-endian target the in-memory bytes are big-endian); `address` is
+/// the four IPv4 octets in wire order; `zero` is padding the kernel ignores.
+///
+/// The kernel accepts exactly this 16-byte structure and validates the family;
+/// use [`SockAddrIn::new`] rather than filling the fields by hand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct SockAddrIn {
+    /// Address family: always [`AF_INET`].
+    pub family: u16,
+    /// Port in network byte order (`port.to_be()`).
+    pub port: u16,
+    /// IPv4 address octets, in wire order.
+    pub address: [u8; 4],
+    /// Padding to the ABI's 16 bytes; the kernel ignores it.
+    pub zero: [u8; 8],
+}
+
+impl SockAddrIn {
+    /// Build a `sockaddr_in` for `address:port`.
+    pub const fn new(address: [u8; 4], port: u16) -> Self {
+        Self {
+            family: AF_INET,
+            // `to_be` on a little-endian target puts the high byte first in
+            // memory, which is exactly the wire order the kernel parses.
+            port: port.to_be(),
+            address,
+            zero: [0; 8],
+        }
+    }
+
+    /// The port in host byte order.
+    pub const fn port(&self) -> u16 {
+        u16::from_be(self.port)
+    }
+
+    /// The IPv4 address octets.
+    pub const fn address(&self) -> [u8; 4] {
+        self.address
+    }
+}
+
 /// Size of the fixed part of one `getdents64` record: `ino` (8) + `kind` (1) +
 /// `name_len` (1) + `reserved` (2).
 ///
@@ -173,4 +225,5 @@ pub const fn dirent_size(name_len: usize) -> Option<usize> {
 const _: () = assert!(core::mem::size_of::<Stat>() == 24);
 const _: () = assert!(core::mem::size_of::<Timespec>() == 16);
 const _: () = assert!(core::mem::size_of::<Uname>() == 80);
+const _: () = assert!(core::mem::size_of::<SockAddrIn>() == 16);
 const _: () = assert!(core::mem::size_of::<u64>() == 8);

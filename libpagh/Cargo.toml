@@ -15,3 +15,7 @@ path = "../examples/hello.rs"
 [[example]]
 name = "fp"
 path = "../examples/fp.rs"
+
+[[example]]
+name = "http_get"
+path = "../examples/http_get.rs"
