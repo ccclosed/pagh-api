@@ -19,3 +19,7 @@ path = "../examples/fp.rs"
 [[example]]
 name = "http_get"
 path = "../examples/http_get.rs"
+
+[[example]]
+name = "threads"
+path = "../examples/threads.rs"

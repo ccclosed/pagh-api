@@ -24,7 +24,8 @@
 //!
 //! # Not provided
 //!
-//! No threads, fork, signals, mmap, `poll` or dynamic linking. The one
+//! Threads and futexes exist ([`thread`]); fork, signals and dynamic linking
+//! do not. The one
 //! socket family is a connected IPv4 TCP client ([`net::TcpStream`]); there is
 //! no listening socket, UDP, DNS or TLS. See `docs/abi.md` §2/§4 and the
 //! README's "What is not supported" list.
@@ -47,6 +48,7 @@ pub mod io;
 pub mod net;
 pub mod path;
 pub mod print;
+pub mod thread;
 mod rt;
 pub mod sys;
 
