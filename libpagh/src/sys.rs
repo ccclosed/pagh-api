@@ -889,3 +889,119 @@ pub fn poll(fds: &mut [PollFd], timeout_ms: i32) -> Result<usize> {
     };
     check(ret).map(|value| value as usize)
 }
+
+
+// ---------------------------------------------------------------------------
+// Threads and futexes (0.13.0)
+// ---------------------------------------------------------------------------
+
+/// `clone(flags, stack, entry, arg, gp, tp)`.
+pub const SYS_CLONE: usize = 220;
+/// `futex(uaddr, op, val, timeout)`.
+pub const SYS_FUTEX: usize = 98;
+/// `gettid()`.
+pub const SYS_GETTID: usize = 178;
+/// `set_tid_address(ptr)`.
+pub const SYS_SET_TID_ADDRESS: usize = 96;
+/// `exit_group(code)`.
+pub const SYS_EXIT_GROUP: usize = 94;
+
+/// `clone` flag: share the address space (required).
+pub const CLONE_VM: u32 = 0x0000_0100;
+/// `clone` flag: share filesystem state.
+pub const CLONE_FS: u32 = 0x0000_0200;
+/// `clone` flag: share the descriptor table.
+pub const CLONE_FILES: u32 = 0x0000_0400;
+/// `clone` flag: share signal handlers (no signals yet; accepted).
+pub const CLONE_SIGHAND: u32 = 0x0000_0800;
+/// `clone` flag: put the child in the caller's thread group (required).
+pub const CLONE_THREAD: u32 = 0x0001_0000;
+/// `clone` flag: set up TLS (not implemented, `-ENOTSUP`).
+pub const CLONE_SETTLS: u32 = 0x0008_0000;
+
+/// `FUTEX_WAIT`: sleep while `*uaddr == val`.
+pub const FUTEX_WAIT: u32 = 0;
+/// `FUTEX_WAKE`: wake up to `val` waiters.
+pub const FUTEX_WAKE: u32 = 1;
+/// The private-futex bit; the ABI has one address space per run, so it is
+/// accepted and has no additional effect.
+pub const FUTEX_PRIVATE_FLAG: u32 = 128;
+
+/// `clone(2)` a thread.
+///
+/// `stack` is one past the child's stack top (16-byte aligned, mapped R/W); the
+/// child enters `entry(arg)` in U-mode with the new stack. The parent gets the
+/// child tid, the child gets 0. Flags must contain [`CLONE_VM`] and
+/// [`CLONE_THREAD`]; [`CLONE_SETTLS`] is rejected with `-ENOTSUP`.
+pub fn clone(
+    flags: u32,
+    stack: usize,
+    entry: usize,
+    arg: usize,
+    gp: usize,
+    tp: usize,
+) -> Result<i32> {
+    // SAFETY: all arguments are integers; the kernel validates stack/entry.
+    let ret = unsafe {
+        syscall6(
+            SYS_CLONE,
+            flags as usize,
+            stack,
+            entry,
+            arg,
+            gp,
+            tp,
+        )
+    };
+    check(ret).map(|value| value as i32)
+}
+
+/// `futex(2)`: `FUTEX_WAIT`/`FUTEX_WAKE` (plus the private flag).
+///
+/// `timeout` is 0 (no deadline) or a `*Timespec`; the operation number is
+/// [`FUTEX_WAIT`]/[`FUTEX_WAKE`] optionally ORed with
+/// [`FUTEX_PRIVATE_FLAG`].
+pub fn futex(uaddr: usize, op: u32, val: u32, timeout: usize) -> Result<i32> {
+    // SAFETY: `uaddr`/`timeout` are validated by the kernel.
+    let ret = unsafe {
+        syscall6(
+            SYS_FUTEX,
+            uaddr,
+            op as usize,
+            val as usize,
+            timeout,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|value| value as i32)
+}
+
+/// `gettid(2)`.
+pub fn gettid() -> Result<i32> {
+    // SAFETY: no arguments.
+    let ret = unsafe { syscall6(SYS_GETTID, 0, 0, 0, 0, 0, 0) };
+    check(ret).map(|value| value as i32)
+}
+
+/// `set_tid_address(2)`: accepted; the ABI does not clear the word on exit.
+pub fn set_tid_address(ptr: usize) -> Result<i32> {
+    // SAFETY: integer argument.
+    let ret = unsafe { syscall6(SYS_SET_TID_ADDRESS, ptr, 0, 0, 0, 0, 0) };
+    check(ret).map(|value| value as i32)
+}
+
+/// `exit_group(2)`: end every thread of the run. Does not return.
+pub fn exit_group(code: i32) -> ! {
+    // SAFETY: the kernel never returns; the loop keeps the function well-formed.
+    unsafe {
+        core::arch::asm!(
+            "ecall",
+            "1:",
+            "j 1b",
+            in("a0") code as isize as usize,
+            in("a7") SYS_EXIT_GROUP,
+            options(noreturn)
+        );
+    }
+}

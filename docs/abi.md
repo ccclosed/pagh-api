@@ -75,6 +75,12 @@ current user address space; a bad pointer returns `-EFAULT` and never faults.
 | 24 | `dup2` | `oldfd`, `newfd` | `newfd` (asm-generic number 24 also answers `dup3`) |
 | 7 | `poll` | `*PollFd`, `nfds`, `timeout_ms` | ready count; `POLLIN`/`POLLOUT`/`POLLERR`/`POLLHUP`/`POLLNVAL` |
 | 72 | `ppoll` | `*PollFd`, `nfds`, `*timespec` (treated as ms), mask (ignored) | as `poll` |
+| 220 | `clone` | `flags` (`CLONE_VM=0x100\|CLONE_THREAD=0x10000` required, `CLONE_FS/FILES/SIGHAND` accepted, `SETTLS` → `-ENOTSUP`), `stack` (16-aligned, mapped R/W), `entry` (mapped X), `arg`, `gp`, `tp` | child tid; child returns 0 and runs `entry(arg)`; `-EINVAL`, `-EAGAIN` |
+| 98 | `futex` | `uaddr` (4-aligned), `op` (`WAIT=0`/`WAKE=1` plus `PRIVATE=128`), `val`, `timeout` (0 or `*Timespec`) | `WAIT`: 0, `-EAGAIN` (value changed), `-ETIMEDOUT`; `WAKE`: number woken; other ops `-ENOSYS` |
+| 178 | `gettid` | — | thread id |
+| 96 | `set_tid_address` | `ptr` | tid; the word is not cleared on exit |
+| 94 | `exit_group` | `code` | ends every thread of the run, does not return |
+
 
 
 Maximum open files per process: **16**, including 0/1/2. fd 0 = console input,

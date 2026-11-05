@@ -226,6 +226,12 @@ def main() -> int:
         "dup2": 24,
         "poll": 7,
         "ppoll": 72,
+        # Native threads and futexes (native-thread).
+        "clone": 220,
+        "futex": 98,
+        "gettid": 178,
+        "set_tid_address": 96,
+        "exit_group": 94,
     }
     if doc_sys != expected:
         errors.append(
