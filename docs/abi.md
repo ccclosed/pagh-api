@@ -85,6 +85,7 @@ current user address space; a bad pointer returns `-EFAULT` and never faults.
 | 134 | `rt_sigaction` | `signum` (1..=31), `*SigAction` (`handler`/`flags`/`mask`/`restorer`), `*oldact`, `sigsetsize=8` | 0; real handlers require `SA_RESTORER`; `SIGKILL`/`SIGSTOP` → `-EINVAL`; unknown flags `-EINVAL` |
 | 135 | `rt_sigprocmask` | `how` (`BLOCK=0`/`UNBLOCK=1`/`SETMASK=2`), `*mask` (u64), `*oldmask`, `sigsetsize=8` | 0 |
 | 139 | `rt_sigreturn` | — | restores the frame the kernel armed for this thread; `-EINVAL` outside a handler |
+| 132 | `sigaltstack` | `*SigAltStack` (`ss_sp`/`ss_flags`/`ss_size`), `*old` | 0; `SS_DISABLE`/`SS_ONSTACK`; `-ENOMEM`/`-EINVAL` for a bad range |
 
 
 

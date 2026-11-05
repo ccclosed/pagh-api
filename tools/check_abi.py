@@ -238,6 +238,7 @@ def main() -> int:
         "rt_sigaction": 134,
         "rt_sigprocmask": 135,
         "rt_sigreturn": 139,
+        "sigaltstack": 132,
     }
     if doc_sys != expected:
         errors.append(

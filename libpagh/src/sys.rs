@@ -11,7 +11,7 @@
 
 use alloc::vec::Vec;
 
-use crate::abi::{PollFd, SigAction, SockAddrIn, Stat, Timespec, Uname};
+use crate::abi::{PollFd, SigAction, SigAltStack, SockAddrIn, Stat, Timespec, Uname};
 use crate::errno::{check, Errno, Result};
 
 // ---------------------------------------------------------------------------
@@ -1164,4 +1164,24 @@ pub fn rt_sigreturn() -> ! {
             options(noreturn)
         );
     }
+}
+
+
+/// `sigaltstack(*SigAltStack, *old)` (0.15.0).
+pub const SYS_SIGALTSTACK: usize = 132;
+
+/// `sigaltstack(2)`: install or query the calling thread's alternate signal
+/// stack. `None` disables it (`SS_DISABLE`).
+pub fn sigaltstack(stack: Option<&SigAltStack>, old: Option<&mut SigAltStack>) -> Result<()> {
+    let stack_ptr = match stack {
+        Some(value) => value as *const SigAltStack as usize,
+        None => 0,
+    };
+    let old_ptr = match old {
+        Some(slot) => slot as *mut SigAltStack as usize,
+        None => 0,
+    };
+    // SAFETY: both pointers are live references; the kernel copies them.
+    let ret = unsafe { syscall6(SYS_SIGALTSTACK, stack_ptr, old_ptr, 0, 0, 0, 0) };
+    check(ret).map(|_| ())
 }

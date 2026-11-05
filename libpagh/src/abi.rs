@@ -272,3 +272,81 @@ pub const SIG_UNBLOCK: usize = 1;
 pub const SIG_SETMASK: usize = 2;
 
 const _: () = assert!(core::mem::size_of::<SigAction>() == 32);
+
+
+/// `struct sigaltstack` — 24 bytes (`ss_sp`, `ss_flags`, padding, `ss_size`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct SigAltStack {
+    /// Stack base, or 0 with `SS_DISABLE`.
+    pub sp: usize,
+    /// `SS_ONSTACK`/`SS_DISABLE`.
+    pub flags: u32,
+    /// Reserved padding (keeps `size` 8-byte aligned).
+    pub pad: u32,
+    /// Stack size in bytes.
+    pub size: usize,
+}
+
+/// Full 128-byte `siginfo_t` as delivered in `a1` (pagh layout).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct SigInfo {
+    /// Signal number.
+    pub signo: i32,
+    /// `errno` associated with the signal (0 here).
+    pub errno: i32,
+    /// `SI_USER`/`SI_KERNEL`/`SI_TKILL`/fault codes.
+    pub code: i32,
+    /// Reserved to 16 bytes.
+    pub pad0: i32,
+    /// Sender pid or fault address (union payload).
+    pub value: u64,
+    /// `si_status` for SIGCHLD (0: no child-exit source yet).
+    pub status: i32,
+    /// Reserved padding to 128 bytes.
+    pub pad1: [u8; 100],
+}
+
+/// The `mcontext` inside a delivered `ucontext_t`: 32 GPRs and the PC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct MContext {
+    /// x0..x31 as saved in the trap frame.
+    pub gregs: [u64; 32],
+    /// Interrupted program counter.
+    pub pc: u64,
+}
+
+/// The 288-byte `ucontext_t` a `SA_SIGINFO` handler receives in `a2`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct UContext {
+    /// Flags (0 today).
+    pub flags: u64,
+    /// `uc_link` (0).
+    pub link: u64,
+    /// Blocked mask at delivery.
+    pub sigmask: u64,
+    /// Register snapshot.
+    pub mcontext: MContext,
+}
+
+/// `SS_DISABLE`: no alternate stack.
+pub const SS_DISABLE: u32 = 2;
+/// `SS_ONSTACK`: a signal handler is currently running on the alternate stack.
+pub const SS_ONSTACK: u32 = 1;
+/// `SA_SIGINFO`: the handler takes `(signo, *siginfo, *ucontext)`.
+pub const SA_SIGINFO: usize = 0x0000_0004;
+/// `SA_ONSTACK`: deliver on the thread's alternate stack.
+pub const SA_ONSTACK: usize = 0x0800_0000;
+/// `SA_RESTART`: restart futex/nanosleep after an interrupted wait.
+pub const SA_RESTART: usize = 0x1000_0000;
+/// `SA_NODEFER`: do not block the delivered signal inside its handler.
+pub const SA_NODEFER: usize = 0x4000_0000;
+/// `SA_RESETHAND`: reset the handler to `SIG_DFL` on delivery.
+pub const SA_RESETHAND: usize = 0x8000_0000;
+
+const _: () = assert!(core::mem::size_of::<SigAltStack>() == 24);
+const _: () = assert!(core::mem::size_of::<SigInfo>() == 128);
+const _: () = assert!(core::mem::size_of::<UContext>() == 288);
