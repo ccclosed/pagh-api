@@ -232,6 +232,12 @@ def main() -> int:
         "gettid": 178,
         "set_tid_address": 96,
         "exit_group": 94,
+        # POSIX-style signals (native-signals).
+        "kill": 129,
+        "tgkill": 131,
+        "rt_sigaction": 134,
+        "rt_sigprocmask": 135,
+        "rt_sigreturn": 139,
     }
     if doc_sys != expected:
         errors.append(

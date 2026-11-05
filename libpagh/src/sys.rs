@@ -11,7 +11,7 @@
 
 use alloc::vec::Vec;
 
-use crate::abi::{PollFd, SockAddrIn, Stat, Timespec, Uname};
+use crate::abi::{PollFd, SigAction, SockAddrIn, Stat, Timespec, Uname};
 use crate::errno::{check, Errno, Result};
 
 // ---------------------------------------------------------------------------
@@ -1001,6 +1001,166 @@ pub fn exit_group(code: i32) -> ! {
             "j 1b",
             in("a0") code as isize as usize,
             in("a7") SYS_EXIT_GROUP,
+            options(noreturn)
+        );
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Signals (0.14.0)
+// ---------------------------------------------------------------------------
+
+/// `kill(pid, sig)`.
+pub const SYS_KILL: usize = 129;
+/// `tgkill(tgid, tid, sig)`.
+pub const SYS_TGKILL: usize = 131;
+/// `rt_sigaction(signum, *sigaction, *oldact, sigsetsize)`.
+pub const SYS_RT_SIGACTION: usize = 134;
+/// `rt_sigprocmask(how, *set, *oldset, sigsetsize)`.
+pub const SYS_RT_SIGPROCMASK: usize = 135;
+/// `rt_sigreturn()`.
+pub const SYS_RT_SIGRETURN: usize = 139;
+
+/// Signal numbers the ABI can name (Linux generic numbering).
+pub const SIGHUP: i32 = 1;
+/// `SIGINT`.
+pub const SIGINT: i32 = 2;
+/// `SIGQUIT`.
+pub const SIGQUIT: i32 = 3;
+/// `SIGILL`.
+pub const SIGILL: i32 = 4;
+/// `SIGTRAP`.
+pub const SIGTRAP: i32 = 5;
+/// `SIGABRT`.
+pub const SIGABRT: i32 = 6;
+/// `SIGBUS`.
+pub const SIGBUS: i32 = 7;
+/// `SIGFPE`.
+pub const SIGFPE: i32 = 8;
+/// `SIGKILL` (cannot be caught or ignored).
+pub const SIGKILL: i32 = 9;
+/// `SIGUSR1`.
+pub const SIGUSR1: i32 = 10;
+/// `SIGSEGV`.
+pub const SIGSEGV: i32 = 11;
+/// `SIGUSR2`.
+pub const SIGUSR2: i32 = 12;
+/// `SIGPIPE`.
+pub const SIGPIPE: i32 = 13;
+/// `SIGALRM`.
+pub const SIGALRM: i32 = 14;
+/// `SIGTERM`.
+pub const SIGTERM: i32 = 15;
+/// `SIGCHLD` (default ignore).
+pub const SIGCHLD: i32 = 17;
+/// `SIGCONT` (default ignore).
+pub const SIGCONT: i32 = 18;
+/// `SIGSTOP` (cannot be caught; job control is not implemented).
+pub const SIGSTOP: i32 = 19;
+/// `SIGWINCH` (default ignore).
+pub const SIGWINCH: i32 = 28;
+
+/// `rt_sigaction(2)`: install `action` (or read the old one).
+pub fn rt_sigaction(
+    signum: i32,
+    action: &SigAction,
+    old: Option<&mut SigAction>,
+) -> Result<()> {
+    let old_ptr = match old {
+        Some(slot) => slot as *mut SigAction as usize,
+        None => 0,
+    };
+    // SAFETY: `action`/`old` are live references; the kernel copies them.
+    let ret = unsafe {
+        syscall6(
+            SYS_RT_SIGACTION,
+            signum as usize,
+            action as *const SigAction as usize,
+            old_ptr,
+            8,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}
+
+/// `rt_sigprocmask(2)`: change the calling thread's blocked mask.
+pub fn rt_sigprocmask(
+    how: usize,
+    set: Option<&u64>,
+    old: Option<&mut u64>,
+) -> Result<()> {
+    let set_ptr = match set {
+        Some(mask) => mask as *const u64 as usize,
+        None => 0,
+    };
+    let old_ptr = match old {
+        Some(slot) => slot as *mut u64 as usize,
+        None => 0,
+    };
+    // SAFETY: pointers are live references; the kernel validates them.
+    let ret = unsafe {
+        syscall6(
+            SYS_RT_SIGPROCMASK,
+            how,
+            set_ptr,
+            old_ptr,
+            8,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}
+
+/// `kill(2)`: send `sig` to `pid` (positive thread id, 0 = thread group,
+/// -1 = every thread of the run).
+pub fn kill(pid: i32, sig: i32) -> Result<()> {
+    // SAFETY: integer arguments.
+    let ret = unsafe {
+        syscall6(
+            SYS_KILL,
+            pid as isize as usize,
+            sig as isize as usize,
+            0,
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}
+
+/// `tgkill(2)`.
+pub fn tgkill(tgid: i32, tid: i32, sig: i32) -> Result<()> {
+    // SAFETY: integer arguments.
+    let ret = unsafe {
+        syscall6(
+            SYS_TGKILL,
+            tgid as usize,
+            tid as usize,
+            sig as isize as usize,
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}
+
+/// `rt_sigreturn(2)`: invoked by a signal restorer to restore the interrupted
+/// context. Must not be called outside a delivered signal.
+pub fn rt_sigreturn() -> ! {
+    // SAFETY: the kernel validates the frame armed for this thread; it never
+    // returns on success. The loop keeps the function well-formed otherwise.
+    unsafe {
+        core::arch::asm!(
+            "ecall",
+            "1:",
+            "j 1b",
+            in("a7") SYS_RT_SIGRETURN,
             options(noreturn)
         );
     }

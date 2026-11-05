@@ -242,3 +242,33 @@ pub struct PollFd {
 }
 
 const _: () = assert!(core::mem::size_of::<PollFd>() == 8);
+
+
+/// `struct sigaction` — 32 bytes (pagh native layout: handler, flags, mask, restorer).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct SigAction {
+    /// Handler address, [`SIG_DFL`]/[`SIG_IGN`], or a user function.
+    pub handler: usize,
+    /// Flags (only `SA_RESTORER` is accepted when a real handler is installed).
+    pub flags: usize,
+    /// Signals blocked while the handler runs.
+    pub mask: u64,
+    /// User restorer called by the handler's `ret`; required for a handler.
+    pub restorer: usize,
+}
+
+/// `SIG_DFL`: default action (terminate the run for fatal signals).
+pub const SIG_DFL: usize = 0;
+/// `SIG_IGN`: discard the signal.
+pub const SIG_IGN: usize = 1;
+/// `sigaction` flag: the handler returns through `restorer`.
+pub const SA_RESTORER: usize = 0x0400_0000;
+/// `rt_sigprocmask` how: add to the blocked mask.
+pub const SIG_BLOCK: usize = 0;
+/// `rt_sigprocmask` how: remove from the blocked mask.
+pub const SIG_UNBLOCK: usize = 1;
+/// `rt_sigprocmask` how: replace the blocked mask.
+pub const SIG_SETMASK: usize = 2;
+
+const _: () = assert!(core::mem::size_of::<SigAction>() == 32);

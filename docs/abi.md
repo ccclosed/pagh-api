@@ -80,6 +80,12 @@ current user address space; a bad pointer returns `-EFAULT` and never faults.
 | 178 | `gettid` | — | thread id |
 | 96 | `set_tid_address` | `ptr` | tid; the word is not cleared on exit |
 | 94 | `exit_group` | `code` | ends every thread of the run, does not return |
+| 129 | `kill` | `pid` (>0 thread id, 0 thread group, -1 run), `sig` | 0; `-ESRCH`, `-EINVAL`, `-ENOSYS` for job-control signals |
+| 131 | `tgkill` | `tgid`, `tid`, `sig` | 0; `-ESRCH` |
+| 134 | `rt_sigaction` | `signum` (1..=31), `*SigAction` (`handler`/`flags`/`mask`/`restorer`), `*oldact`, `sigsetsize=8` | 0; real handlers require `SA_RESTORER`; `SIGKILL`/`SIGSTOP` → `-EINVAL`; unknown flags `-EINVAL` |
+| 135 | `rt_sigprocmask` | `how` (`BLOCK=0`/`UNBLOCK=1`/`SETMASK=2`), `*mask` (u64), `*oldmask`, `sigsetsize=8` | 0 |
+| 139 | `rt_sigreturn` | — | restores the frame the kernel armed for this thread; `-EINVAL` outside a handler |
+
 
 
 
