@@ -11,3 +11,7 @@ path = "src/lib.rs"
 [[example]]
 name = "hello"
 path = "../examples/hello.rs"
+
+[[example]]
+name = "fp"
+path = "../examples/fp.rs"
