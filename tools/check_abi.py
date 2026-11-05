@@ -239,6 +239,11 @@ def main() -> int:
         "rt_sigprocmask": 135,
         "rt_sigreturn": 139,
         "sigaltstack": 132,
+        # Native processes (native-proc).
+        "fork": 1000,
+        "execve": 221,
+        "wait4": 260,
+        "getppid": 173,
     }
     if doc_sys != expected:
         errors.append(

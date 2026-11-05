@@ -1185,3 +1185,111 @@ pub fn sigaltstack(stack: Option<&SigAltStack>, old: Option<&mut SigAltStack>) -
     let ret = unsafe { syscall6(SYS_SIGALTSTACK, stack_ptr, old_ptr, 0, 0, 0, 0) };
     check(ret).map(|_| ())
 }
+
+
+// ---------------------------------------------------------------------------
+// Processes (0.16.0)
+// ---------------------------------------------------------------------------
+
+/// `fork()` (pagh-native number; asm-generic has no fork).
+pub const SYS_FORK: usize = 1000;
+/// `execve(path, argv, envp)`.
+pub const SYS_EXECVE: usize = 221;
+/// `wait4(pid, *status, options, *rusage)`.
+pub const SYS_WAIT4: usize = 260;
+/// `getppid()`.
+pub const SYS_GETPPID: usize = 173;
+
+/// `wait4` option: return immediately if no child has exited.
+pub const WNOHANG: u32 = 1;
+
+/// `fork(2)`: duplicate the calling process (address space, fds, handlers).
+///
+/// Parent gets the child pid, the child gets 0 and continues at the same
+/// instruction. The child's socket descriptors are `-ENOTSUP` (one TCP
+/// connection belongs to one process); pipes share the ring.
+pub fn fork() -> Result<i32> {
+    // SAFETY: no arguments.
+    let ret = unsafe { syscall6(SYS_FORK, 0, 0, 0, 0, 0, 0) };
+    check(ret).map(|pid| pid as i32)
+}
+
+/// The `wait4` status encoding: `code << 8` for a normal exit, or the signal
+/// number in the low 7 bits.
+pub fn wait_status_code(status: i32) -> i32 {
+    status >> 8
+}
+
+/// `wait4(2)` without rusage: returns `(pid, raw_status)`, or `(0, 0)` when
+/// [`WNOHANG`] found no exited child. Blocks only with `WNOHANG` clear.
+pub fn wait4(pid: i32, options: u32) -> Result<(i32, i32)> {
+    let mut status: i32 = 0;
+    // SAFETY: the pointer is a live stack variable the kernel writes.
+    let ret = unsafe {
+        syscall6(
+            SYS_WAIT4,
+            pid as isize as usize,
+            &mut status as *mut i32 as usize,
+            options as usize,
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|child| (child as i32, status))
+}
+
+/// `getppid(2)`.
+pub fn getppid() -> Result<i32> {
+    // SAFETY: no arguments.
+    let ret = unsafe { syscall6(SYS_GETPPID, 0, 0, 0, 0, 0, 0) };
+    check(ret).map(|pid| pid as i32)
+}
+
+/// `execve(2)`: replace the current image. Returns only on error.
+///
+/// `argv`/`envp` are copied into NUL-terminated strings for the kernel; the
+/// arrays are local and stay alive across the syscall. A program that needs
+/// `argv[0]` explicitly should pass it as the first element (the kernel does
+/// not synthesize one).
+pub fn execve(path: &str, argv: &[&str], envp: &[&str]) -> Result<()> {
+    use alloc::vec::Vec;
+    if path.len() >= 256 {
+        return Err(Errno::ENAMETOOLONG);
+    }
+    let mut path_bytes = Vec::with_capacity(path.len() + 1);
+    path_bytes.extend_from_slice(path.as_bytes());
+    path_bytes.push(0);
+    let mut arg_store: Vec<Vec<u8>> = Vec::with_capacity(argv.len());
+    for arg in argv {
+        let mut bytes = Vec::with_capacity(arg.len() + 1);
+        bytes.extend_from_slice(arg.as_bytes());
+        bytes.push(0);
+        arg_store.push(bytes);
+    }
+    let mut env_store: Vec<Vec<u8>> = Vec::with_capacity(envp.len());
+    for value in envp {
+        let mut bytes = Vec::with_capacity(value.len() + 1);
+        bytes.extend_from_slice(value.as_bytes());
+        bytes.push(0);
+        env_store.push(bytes);
+    }
+    let mut arg_ptrs: Vec<usize> = arg_store.iter_mut().map(|v| v.as_mut_ptr() as usize).collect();
+    arg_ptrs.push(0);
+    let mut env_ptrs: Vec<usize> = env_store.iter_mut().map(|v| v.as_mut_ptr() as usize).collect();
+    env_ptrs.push(0);
+    // SAFETY: every pointer references storage kept alive above; the kernel
+    // copies the strings and the NULL-terminated pointer arrays.
+    let ret = unsafe {
+        syscall6(
+            SYS_EXECVE,
+            path_bytes.as_ptr() as usize,
+            arg_ptrs.as_ptr() as usize,
+            env_ptrs.as_ptr() as usize,
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}

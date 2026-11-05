@@ -67,6 +67,11 @@ current user address space; a bad pointer returns `-EFAULT` and never faults.
 | 208 | `setsockopt` | `fd`, `level`, `optname`, `optval`, `optlen` | 0 for `SO_REUSEADDR`, `SO_KEEPALIVE`, `SO_RCVTIMEO`, `SO_SNDTIMEO`, `TCP_NODELAY` (validated and ignored); `-ENOPROTOOPT` otherwise |
 | 209 | `getsockopt` | `fd`, `level`, `optname`, `optval`, `*optlen` | 0 for `SO_TYPE` (`SOCK_STREAM`), `SO_ERROR` (0), `SO_RCVTIMEO`/`SO_SNDTIMEO` (0), `TCP_NODELAY` (0); `-ENOPROTOOPT` otherwise |
 | 210 | `shutdown` | `fd`, `how` (0 read, 1 write, 2 both) | 0; both directions close (no half-close), the descriptor stays open: later `read` is 0, `write` is `-EPIPE` |
+| 1000 | `fork` | — | pagh-native number: duplicate the process (deep-copied user pages into a new Sv39 root/ASID, fd table with pipe refs/socket ENOTSUP, handlers/masks/altstack; no pending/siblings). Parent gets pid > 0, child 0, both continue at `sepc+4`; `-EAGAIN`/`-EINVAL` |
+| 221 | `execve` | `path` (absolute), `argv` (NULL-terminated user array), `envp` | replaces image/stack/heap/mmap; pid/ppid/fds/blocked mask kept, handlers reset, altstack off, pending cleared, siblings retired; returns only on error (`-ENOENT`/`-ENOEXEC`/`-EISDIR`/`-E2BIG`/`-EFAULT`/`-ENOMEM`) without changing the image |
+| 260 | `wait4` | `pid` (>0 specific, 0/-1 any), `*status`, `options` (`WNOHANG=1`; other bits `-EINVAL`), `rusage` (ignored) | pid of the reaped child; 0 when `WNOHANG` has no exited child; status `code<<8` or signal number; `-ECHILD`, `-EFAULT` |
+| 173 | `getppid` | — | parent pid (0 for the shell-started program; the fork parent's pid after fork; preserved by execve) |
+
 | 222 | `mmap` | `addr` (hint, 0 = pick), `length`, `prot` (`PROT_READ=1`/`WRITE=2`/`EXEC=4`), `flags` (`MAP_PRIVATE=2\|MAP_ANONYMOUS=0x20`), `fd` (-1), `offset` (0) | mapped address; `-ENOMEM`, `-EINVAL`, `-ENOTSUP` (shared/file-backed) |
 | 215 | `munmap` | `addr` (page-aligned), `length` | 0; `-EINVAL` for a range that is not this run's mapping |
 | 226 | `mprotect` | `addr` (page-aligned), `length`, `prot` | 0; W^X is rejected with `-EINVAL` |
