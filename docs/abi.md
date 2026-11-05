@@ -67,6 +67,15 @@ current user address space; a bad pointer returns `-EFAULT` and never faults.
 | 208 | `setsockopt` | `fd`, `level`, `optname`, `optval`, `optlen` | 0 for `SO_REUSEADDR`, `SO_KEEPALIVE`, `SO_RCVTIMEO`, `SO_SNDTIMEO`, `TCP_NODELAY` (validated and ignored); `-ENOPROTOOPT` otherwise |
 | 209 | `getsockopt` | `fd`, `level`, `optname`, `optval`, `*optlen` | 0 for `SO_TYPE` (`SOCK_STREAM`), `SO_ERROR` (0), `SO_RCVTIMEO`/`SO_SNDTIMEO` (0), `TCP_NODELAY` (0); `-ENOPROTOOPT` otherwise |
 | 210 | `shutdown` | `fd`, `how` (0 read, 1 write, 2 both) | 0; both directions close (no half-close), the descriptor stays open: later `read` is 0, `write` is `-EPIPE` |
+| 222 | `mmap` | `addr` (hint, 0 = pick), `length`, `prot` (`PROT_READ=1`/`WRITE=2`/`EXEC=4`), `flags` (`MAP_PRIVATE=2\|MAP_ANONYMOUS=0x20`), `fd` (-1), `offset` (0) | mapped address; `-ENOMEM`, `-EINVAL`, `-ENOTSUP` (shared/file-backed) |
+| 215 | `munmap` | `addr` (page-aligned), `length` | 0; `-EINVAL` for a range that is not this run's mapping |
+| 226 | `mprotect` | `addr` (page-aligned), `length`, `prot` | 0; W^X is rejected with `-EINVAL` |
+| 59 | `pipe2` | `*fds[2]`, `flags` (must be 0) | 0; read end non-blocking (`-EAGAIN` when empty), EOF once all write ends close |
+| 23 | `dup` | `fd` | new fd |
+| 24 | `dup2` | `oldfd`, `newfd` | `newfd` (asm-generic number 24 also answers `dup3`) |
+| 7 | `poll` | `*PollFd`, `nfds`, `timeout_ms` | ready count; `POLLIN`/`POLLOUT`/`POLLERR`/`POLLHUP`/`POLLNVAL` |
+| 72 | `ppoll` | `*PollFd`, `nfds`, `*timespec` (treated as ms), mask (ignored) | as `poll` |
+
 
 Maximum open files per process: **16**, including 0/1/2. fd 0 = console input,
 1 = console output, 2 = console diagnostics (all three are the same UART/screen;

@@ -217,6 +217,15 @@ def main() -> int:
         "setsockopt": 208,
         "getsockopt": 209,
         "shutdown": 210,
+        # The POSIX memory/descriptor subset (native-posix).
+        "mmap": 222,
+        "munmap": 215,
+        "mprotect": 226,
+        "pipe2": 59,
+        "dup": 23,
+        "dup2": 24,
+        "poll": 7,
+        "ppoll": 72,
     }
     if doc_sys != expected:
         errors.append(

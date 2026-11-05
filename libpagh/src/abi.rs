@@ -227,3 +227,18 @@ const _: () = assert!(core::mem::size_of::<Timespec>() == 16);
 const _: () = assert!(core::mem::size_of::<Uname>() == 80);
 const _: () = assert!(core::mem::size_of::<SockAddrIn>() == 16);
 const _: () = assert!(core::mem::size_of::<u64>() == 8);
+
+
+/// `struct PollFd` — 8 bytes (the `poll(2)` descriptor).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct PollFd {
+    /// The descriptor being watched.
+    pub fd: i32,
+    /// Requested events (`POLLIN`/`POLLOUT`).
+    pub events: i16,
+    /// Returned events.
+    pub revents: i16,
+}
+
+const _: () = assert!(core::mem::size_of::<PollFd>() == 8);

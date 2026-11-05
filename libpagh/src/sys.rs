@@ -11,7 +11,7 @@
 
 use alloc::vec::Vec;
 
-use crate::abi::{SockAddrIn, Stat, Timespec, Uname};
+use crate::abi::{PollFd, SockAddrIn, Stat, Timespec, Uname};
 use crate::errno::{check, Errno, Result};
 
 // ---------------------------------------------------------------------------
@@ -757,4 +757,135 @@ pub fn exit(code: i32) -> ! {
             options(noreturn)
         );
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// Memory, pipes and poll (0.12.0)
+// ---------------------------------------------------------------------------
+
+/// `mmap(addr, length, prot, flags, fd, offset)`.
+pub const SYS_MMAP: usize = 222;
+/// `munmap(addr, length)`.
+pub const SYS_MUNMAP: usize = 215;
+/// `mprotect(addr, length, prot)`.
+pub const SYS_MPROTECT: usize = 226;
+/// `pipe2(*fds, flags)`.
+pub const SYS_PIPE2: usize = 59;
+/// `dup(fd)`.
+pub const SYS_DUP: usize = 23;
+/// `dup2(oldfd, newfd)` (the ABI answers asm-generic number 24, also `dup3`).
+pub const SYS_DUP2: usize = 24;
+/// `poll(*PollFd, nfds, timeout_ms)`.
+pub const SYS_POLL: usize = 7;
+/// `ppoll(*PollFd, nfds, *timespec, sigmask)`; the ABI treats the timeout as
+/// milliseconds and ignores the mask.
+pub const SYS_PPOLL: usize = 72;
+
+/// `mmap` protection: readable.
+pub const PROT_READ: u32 = 1;
+/// `mmap` protection: writable.
+pub const PROT_WRITE: u32 = 2;
+/// `mmap` protection: executable.
+pub const PROT_EXEC: u32 = 4;
+/// `mmap` flag: private mapping.
+pub const MAP_PRIVATE: u32 = 2;
+/// `mmap` flag: anonymous memory (no fd).
+pub const MAP_ANONYMOUS: u32 = 0x20;
+/// `poll` event: readable.
+pub const POLLIN: i16 = 1;
+/// `poll` event: writable.
+pub const POLLOUT: i16 = 4;
+/// `poll` event: error.
+pub const POLLERR: i16 = 8;
+/// `poll` event: hang-up.
+pub const POLLHUP: i16 = 0x10;
+/// `poll` event: invalid descriptor.
+pub const POLLNVAL: i16 = 0x20;
+
+/// `mmap(2)` anonymous private pages.
+///
+/// `addr` is a hint; the kernel picks a free page in its mmap window if it is
+/// not usable. Memory is zeroed and freed at process exit.
+pub fn mmap(addr: usize, length: usize, prot: u32, flags: u32) -> Result<usize> {
+    // SAFETY: integer arguments; the kernel validates the range.
+    let ret = unsafe {
+        syscall6(
+            SYS_MMAP,
+            addr,
+            length,
+            prot as usize,
+            flags as usize,
+            usize::MAX,
+            0,
+        )
+    };
+    check(ret).map(|value| value as usize)
+}
+
+/// `munmap(2)`.
+pub fn munmap(addr: usize, length: usize) -> Result<()> {
+    // SAFETY: integer arguments.
+    let ret = unsafe { syscall6(SYS_MUNMAP, addr, length, 0, 0, 0, 0) };
+    check(ret).map(|_| ())
+}
+
+/// `mprotect(2)`.
+pub fn mprotect(addr: usize, length: usize, prot: u32) -> Result<()> {
+    // SAFETY: integer arguments.
+    let ret = unsafe { syscall6(SYS_MPROTECT, addr, length, prot as usize, 0, 0, 0) };
+    check(ret).map(|_| ())
+}
+
+/// `pipe2(2)` with flags 0: returns `[read_fd, write_fd]`.
+pub fn pipe2() -> Result<[i32; 2]> {
+    let mut fds = [0i32; 2];
+    // SAFETY: `fds` is a live two-element array the kernel writes into.
+    let ret = unsafe { syscall6(SYS_PIPE2, fds.as_mut_ptr() as usize, 0, 0, 0, 0, 0) };
+    check(ret).map(|_| fds)
+}
+
+/// `dup(2)`.
+pub fn dup(fd: i32) -> Result<i32> {
+    // SAFETY: integer argument.
+    let ret = unsafe { syscall6(SYS_DUP, fd as isize as usize, 0, 0, 0, 0, 0) };
+    check(ret).map(|value| value as i32)
+}
+
+/// `dup2(2)`.
+pub fn dup2(oldfd: i32, newfd: i32) -> Result<i32> {
+    // SAFETY: integer arguments.
+    let ret = unsafe {
+        syscall6(
+            SYS_DUP2,
+            oldfd as isize as usize,
+            newfd as isize as usize,
+            0,
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|value| value as i32)
+}
+
+/// `poll(2)`: wait up to `timeout_ms` (negative = wait forever, 0 = probe).
+///
+/// The kernel is non-blocking per descriptor but the syscall yields until an
+/// event or the timeout; it returns the number of ready descriptors.
+pub fn poll(fds: &mut [PollFd], timeout_ms: i32) -> Result<usize> {
+    // SAFETY: the slice is valid for the kernel's writes; the kernel validates
+    // the range before touching it.
+    let ret = unsafe {
+        syscall6(
+            SYS_POLL,
+            fds.as_mut_ptr() as usize,
+            fds.len(),
+            timeout_ms as isize as usize,
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|value| value as usize)
 }
