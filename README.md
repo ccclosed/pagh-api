@@ -132,13 +132,14 @@ CLI-процесса, а не универсальный malloc.
 приводит к `program: out of memory (brk failed); …` на fd 2 и `exit(102)`.
 Это не паника и не зависание.
 
-## stdin, EOF и почему нет `poll`
+## stdin, EOF и `poll`
 
-`read(0)` по ABI возвращает `-EAGAIN`, пока в очереди нет байта. Готового
-`poll` в ABI нет, поэтому читатели консоли (`cat`, `wc`, `head`, `tail` в
-`pagh-programs`) крутят `read` + `sched_yield`. `0` байт считается EOF, но
-консольный fd 0 в текущем ядре EOF не выдаёт — `cat` без файлов будет ждать
-ввод вечно, как интерактивный `cat`. Это ограничение ядра, записано в отчёт.
+`read(0)` по ABI возвращает `-EAGAIN`, пока в очереди нет байта; `poll(7)`
+(0.12.0) умеет ждать `POLLIN` на консоли, поэтому новые читатели могут спать
+вместо `read` + `sched_yield`. Старые applets оставлены на yield-цикле —
+поведение то же. `0` байт считается EOF, но консольный fd 0 в текущем ядре
+EOF не выдаёт — `cat` без файлов будет ждать ввод вечно, как интерактивный
+`cat`. Это ограничение ядра, записано в отчёт.
 
 ## Паника и аварийные коды
 
@@ -151,8 +152,11 @@ CLI-процесса, а не универсальный malloc.
 
 ## Чего нет
 
-Ни потоков, ни `fork`, ни сигналов, ни `mmap`, ни `poll`, ни
-динамического линкера, ни `auxv`/TLS, ни libc, ни `std`. Файловые мутации есть:
+Ни `fork`/`exec`/`wait`, ни динамического линкера, ни `auxv`/TLS, ни libc, ни
+`std`. Потоки и futex есть (0.13.0: [`thread::Builder`](libpagh/src/thread.rs)),
+сигналы — `kill`/`tgkill`/`rt_sigaction`/`rt_sigprocmask`/`rt_sigreturn`
+(0.14.0), память — `mmap`/`munmap`/`mprotect`, дескрипторы — `pipe2`/`dup`/
+`dup2`/`poll`/`ppoll`. Файловые мутации есть:
 `mkdirat`/`unlinkat`/`symlinkat`/`linkat`/`renameat2`/`fchmodat`/`ftruncate`
 (номера 34–37, 53, 46, 276) и обёртки `fs::create_dir`, `remove_file`,
 `remove_dir`, `rename`, `hard_link`, `symlink`, `truncate`, `set_permissions`,
@@ -162,8 +166,9 @@ CLI-процесса, а не универсальный malloc.
 
 Сокеты есть ровно в объёме одного **активного** TCP-клиента: `AF_INET` +
 `SOCK_STREAM`, `connect` по IPv4-литералу, `send`/`recv`, `shutdown`. Нет
-`bind`/`listen`/`accept`, UDP, IPv6, DNS/`getaddrinfo`, `poll`/`select`,
-`sendmsg`/`recvmsg` и TLS; второе соединение одновременно невозможно.
+`bind`/`listen`/`accept`, UDP, IPv6, DNS/`getaddrinfo`, `sendmsg`/`recvmsg` и
+TLS; второе соединение одновременно невозможно. `poll` на socket-fd работает
+(готовность к чтению/записи).
 `recv` неблокирующий (`EAGAIN` — повторить), `shutdown` закрывает оба
 направления, `setsockopt` для типовых `SO_*`/`TCP_NODELAY` принимается и
 игнорируется.
