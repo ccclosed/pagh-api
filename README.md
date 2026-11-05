@@ -152,8 +152,8 @@ EOF не выдаёт — `cat` без файлов будет ждать вво
 
 ## Чего нет
 
-Ни `fork`/`exec`/`wait`, ни динамического линкера, ни `auxv`/TLS, ни libc, ни
-`std`. Потоки и futex есть (0.13.0: [`thread::Builder`](libpagh/src/thread.rs)),
+Ни динамического линкера, ни `auxv`/TLS, ни libc, ни `std`. Процессы есть:
+`fork`/`execve`/`wait4`/`getppid` (0.16.0). Потоки и futex есть (0.13.0: [`thread::Builder`](libpagh/src/thread.rs)),
 сигналы — `kill`/`tgkill`/`rt_sigaction`/`rt_sigprocmask`/`rt_sigreturn`
 (0.14.0), память — `mmap`/`munmap`/`mprotect`, дескрипторы — `pipe2`/`dup`/
 `dup2`/`poll`/`ppoll`. Файловые мутации есть:
