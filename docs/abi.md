@@ -224,7 +224,7 @@ EISCONN=106 ENOTCONN=107 ETIMEDOUT=110 ECONNREFUSED=111 EHOSTUNREACH=113`.
   with `Read`/`Write` (non-blocking `read`: retry on `EAGAIN`), `read_to_end`
   and `shutdown`. No listener, UDP, DNS or TLS; see the socket subsection above.
 * Panics print `program: panic at <loc>` to fd 2 and `exit(101)`; no unwinding.
-* One process at a time: no threads, fork, signals, mmap, poll/select or dynamic linking; the one socket family is the connected IPv4 TCP client above.
+* The ABI has threads, fork/exec/wait, signals, mmap/mprotect, poll and futexes; what it still lacks is a dynamic loader in the kernel (userland `ld-pagh` covers that), file-backed mmap and a general socket server API.
 
 ## 5. Program pack format (`pagh-programs`)
 

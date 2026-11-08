@@ -50,6 +50,7 @@ pub mod path;
 pub mod print;
 pub mod thread;
 mod rt;
+pub mod sync;
 pub mod sys;
 
 pub use abi::{EntryKind, SockAddrIn, Stat, Timespec, Uname};

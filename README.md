@@ -22,6 +22,7 @@ libpagh/src/env.rs   args(), var(), current_dir()
 libpagh/src/print.rs print!/println!/eprintln!
 examples/hello.rs    пример программы
 examples/http_get.rs HTTP/1.0 GET на 10.0.2.2:8000 (нативный сокет)
+examples/mutex.rs    четыре потока под futex Mutex (counter=1000)
 tools/check_abi.py   сверка чисел в docs/abi.md с sys.rs/errno.rs/abi.rs
 ```
 
@@ -153,7 +154,7 @@ EOF не выдаёт — `cat` без файлов будет ждать вво
 ## Чего нет
 
 Ни динамического линкера, ни `auxv`/TLS, ни libc, ни `std`. Процессы есть:
-`fork`/`execve`/`wait4`/`getppid` (0.16.0). Потоки и futex есть (0.13.0: [`thread::Builder`](libpagh/src/thread.rs)),
+`fork`/`execve`/`wait4`/`getppid` (0.16.0). Потоки и futex есть (0.13.0: [`thread::Builder`](libpagh/src/thread.rs)), [`sync::Mutex`/`RwLock`](libpagh/src/sync.rs) — 0.5.0,
 сигналы — `kill`/`tgkill`/`rt_sigaction`/`rt_sigprocmask`/`rt_sigreturn`
 (0.14.0), память — `mmap`/`munmap`/`mprotect`, дескрипторы — `pipe2`/`dup`/
 `dup2`/`poll`/`ppoll`. Файловые мутации есть:

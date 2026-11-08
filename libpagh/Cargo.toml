@@ -23,3 +23,7 @@ path = "../examples/http_get.rs"
 [[example]]
 name = "threads"
 path = "../examples/threads.rs"
+
+[[example]]
+name = "mutex"
+path = "../examples/mutex.rs"
