@@ -209,8 +209,10 @@ def main() -> int:
         "ftruncate": 46,
         "renameat2": 276,
         # The BSD-socket subset (native-sock). Additive as well: one connected
-        # AF_INET/SOCK_STREAM socket, no listener, UDP or DNS.
+        # AF_INET/SOCK_STREAM socket plus AF_INET/SOCK_DGRAM (bind 200); no
+        # listener, UDP connect or DNS.
         "socket": 198,
+        "bind": 200,
         "connect": 203,
         "sendto": 206,
         "recvfrom": 207,

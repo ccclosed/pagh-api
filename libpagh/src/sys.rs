@@ -64,6 +64,8 @@ pub const SYS_FTRUNCATE: usize = 46;
 pub const SYS_RENAMEAT2: usize = 276;
 /// `socket(domain, type, protocol)`.
 pub const SYS_SOCKET: usize = 198;
+/// `bind(fd, *sockaddr_in, addrlen)`.
+pub const SYS_BIND: usize = 200;
 /// `connect(fd, *sockaddr_in, addrlen)`.
 pub const SYS_CONNECT: usize = 203;
 /// `sendto(fd, buf, len, flags, dest, addrlen)` (the `send` shape on a
@@ -602,13 +604,23 @@ pub fn ftruncate(fd: i32, length: u64) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// BSD sockets (AF_INET / SOCK_STREAM only; see docs/abi.md §2)
+// BSD sockets (AF_INET; one TCP client and datagram sockets; see docs/abi.md §2)
 // ---------------------------------------------------------------------------
 
 /// `AF_INET`: the only address family the kernel accepts.
 pub const AF_INET: u16 = crate::abi::AF_INET;
-/// `SOCK_STREAM`: the only socket type the kernel accepts.
+/// `SOCK_STREAM`: the one TCP client.
 pub const SOCK_STREAM: u32 = crate::abi::SOCK_STREAM;
+/// `SOCK_DGRAM`: a UDP socket. It must be bound before `recv_from`.
+pub const SOCK_DGRAM: u32 = 2;
+/// `socket()` type bit: make the descriptor non-blocking. Accepted for
+/// `SOCK_DGRAM`; the stream receive path is already non-blocking.
+pub const SOCK_NONBLOCK: u32 = 0x800;
+/// `recvfrom` flag: return `EAGAIN` instead of waiting for a datagram.
+pub const MSG_DONTWAIT: u32 = 0x40;
+/// Largest UDP payload the kernel accepts in one `sendto` (bytes). A bigger
+/// buffer is `EMSGSIZE`; the receive side truncates a larger datagram.
+pub const UDP_DATAGRAM_MAX: usize = 1024;
 /// `shutdown`: no further receives.
 pub const SHUT_RD: u32 = 0;
 /// `shutdown`: no further sends.
@@ -618,11 +630,11 @@ pub const SHUT_RDWR: u32 = 2;
 
 /// `socket(domain, type, protocol)`: create a BSD socket descriptor.
 ///
-/// The kernel has one TCP connection, so at most one socket descriptor exists
-/// per run: a second call while the first is open is `ENOSPC`. The only
-/// supported combination is `AF_INET` / `SOCK_STREAM` / protocol 0; anything
-/// else is `EAFNOSUPPORT` (the kernel documents one answer rather than
-/// inventing per-field errnos).
+/// `AF_INET` with protocol 0 accepts `SOCK_STREAM` (one TCP connection per
+/// run; a second stream socket is `ENOSPC`) and `SOCK_DGRAM` (UDP; any number
+/// may be open, and `SOCK_NONBLOCK` may be ORed into the type). Anything else
+/// is `EAFNOSUPPORT` (the kernel documents one answer rather than inventing
+/// per-field errnos).
 pub fn socket(domain: u16, kind: u32, protocol: u32) -> Result<i32> {
     // SAFETY: all arguments are plain integers; no pointers.
     let ret = unsafe {
@@ -660,6 +672,78 @@ pub fn connect(fd: i32, address: &SockAddrIn) -> Result<()> {
         )
     };
     check(ret).map(|_| ())
+}
+
+/// `bind(fd, *sockaddr_in, sizeof(sockaddr_in))` for a UDP socket.
+///
+/// `address` may use `0.0.0.0` (any local address) or the interface's DHCP
+/// lease; port 0 asks the kernel for an ephemeral port. Binding a port another
+/// socket owns is `EADDRINUSE`; binding twice is `EINVAL`; a TCP descriptor is
+/// `ENOTSUP`.
+pub fn bind(fd: i32, address: &SockAddrIn) -> Result<()> {
+    // SAFETY: `address` is a live, correctly aligned `SockAddrIn`; the kernel
+    // copies exactly 16 bytes and validates the family and port.
+    let ret = unsafe {
+        syscall6(
+            SYS_BIND,
+            fd as isize as usize,
+            address as *const SockAddrIn as usize,
+            core::mem::size_of::<SockAddrIn>(),
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}
+
+/// `sendto(fd, buf, len, 0, *sockaddr_in, 16)`: send one UDP datagram.
+///
+/// The destination is mandatory. A payload larger than the kernel's
+/// `UDP_DATAGRAM_MAX` (1024 bytes) is `EMSGSIZE`; there is no fragmentation
+/// and no partial datagram.
+pub fn sendto(fd: i32, buf: &[u8], address: &SockAddrIn) -> Result<usize> {
+    // SAFETY: `buf` is a live shared slice and `address` a live `SockAddrIn`;
+    // the kernel validates both ranges and reads at most `buf.len()` bytes.
+    let ret = unsafe {
+        syscall6(
+            SYS_SENDTO,
+            fd as isize as usize,
+            ptr_of(buf),
+            buf.len(),
+            0,
+            address as *const SockAddrIn as usize,
+            core::mem::size_of::<SockAddrIn>(),
+        )
+    };
+    check_len(ret, buf.len())
+}
+
+/// `recvfrom(fd, buf, len, flags, *sockaddr_in, *addrlen)`: receive one UDP
+/// datagram and its source address.
+///
+/// With `flags == 0` the kernel waits (bounded, polling the NIC) for a
+/// datagram and answers `EAGAIN` if the wait expires; pass [`MSG_DONTWAIT`]
+/// for the single-poll shape. The source address is always filled.
+pub fn recvfrom(fd: i32, buf: &mut [u8], flags: u32) -> Result<(usize, SockAddrIn)> {
+    let mut source = SockAddrIn::new([0; 4], 0);
+    let mut length = core::mem::size_of::<SockAddrIn>() as u32;
+    // SAFETY: `buf`, `source` and `length` are live for the call; the kernel
+    // validates each range and writes at most `buf.len()` bytes plus one
+    // `SockAddrIn` and one `u32`.
+    let ret = unsafe {
+        syscall6(
+            SYS_RECVFROM,
+            fd as isize as usize,
+            ptr_of(buf),
+            buf.len(),
+            flags as usize,
+            &mut source as *mut SockAddrIn as usize,
+            &mut length as *mut u32 as usize,
+        )
+    };
+    let read = check_len(ret, buf.len())?;
+    Ok((read, source))
 }
 
 /// `send` on a connected socket: the `sendto` wire shape with no destination.

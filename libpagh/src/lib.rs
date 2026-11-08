@@ -25,10 +25,10 @@
 //! # Not provided
 //!
 //! Threads and futexes exist ([`thread`]); fork, signals and dynamic linking
-//! do not. The one
-//! socket family is a connected IPv4 TCP client ([`net::TcpStream`]); there is
-//! no listening socket, UDP, DNS or TLS. See `docs/abi.md` §2/§4 and the
-//! README's "What is not supported" list.
+//! do not. Sockets are one connected IPv4 TCP client ([`net::TcpStream`]) and
+//! bound UDP datagram sockets ([`net::UdpSocket`]); there is no listening
+//! socket, UDP `connect`, DNS or TLS. See `docs/abi.md` §2/§4 and the README's
+//! "What is not supported" list.
 //!
 //! Every `unsafe` block carries a `SAFETY:` comment; the small number of them
 //! is intentional.

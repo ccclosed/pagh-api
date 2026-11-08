@@ -60,12 +60,13 @@ current user address space; a bad pointer returns `-EFAULT` and never faults.
 | 276 | `renameat2` | `olddirfd`, `oldpath`, `newdirfd`, `newpath`, `flags` (must be 0) | 0; `-EEXIST`, `-ENOENT`, `-ENOTEMPTY`, `-EISDIR`, `-ENOTSUP` |
 | 53 | `fchmodat` | `dirfd` (ignored), `path`, `mode` (`& 0o7777`), `flags` (must be 0) | 0; mode is per-run and visible to `fstat`, not persisted; `-ENOTSUP` on a synthetic node |
 | 46 | `ftruncate` | `fd`, `length` | 0; `-EINVAL` for fd 0/1/2, `-EBADF` (read-only fd), `-EISDIR` |
-| 198 | `socket` | `domain` (`AF_INET=2`), `type` (`SOCK_STREAM=1`), `protocol` (0) | fd ≥ 3; `-EAFNOSUPPORT` for any other combination; a second socket while one is open is `-ENOSPC` |
-| 203 | `connect` | `fd`, `*SockAddrIn`, `addrlen` (must be 16) | 0; `-EINVAL`, `-EAFNOSUPPORT`, `-ENOTSOCK`, `-EISCONN`, `-ENETUNREACH`, `-EHOSTUNREACH`, `-ECONNREFUSED`, `-ETIMEDOUT`, `-EAGAIN` |
-| 206 | `sendto` | `fd`, `buf`, `len`, `flags` (must be 0), `dest` (0, or validated and ignored on a connected socket), `addrlen` | bytes sent; `-ENOTCONN`, `-EPIPE`, `-ECONNRESET`, `-ETIMEDOUT`; the `send` shape |
-| 207 | `recvfrom` | `fd`, `buf`, `len`, `flags` (must be 0), `src` (0, or filled with the peer), `*addrlen` | bytes; **`-EAGAIN` when nothing is queued yet** (poll again), 0 = peer closed; the `recv` shape |
+| 198 | `socket` | `domain` (`AF_INET=2`), `type` (`SOCK_STREAM=1` or `SOCK_DGRAM=2`, optionally ORed with `SOCK_NONBLOCK=0x800` for DGRAM), `protocol` (0) | fd ≥ 3; `-EAFNOSUPPORT` for any other combination; a second stream socket while one is open is `-ENOSPC`; any number of datagram sockets |
+| 200 | `bind` | `fd` (UDP), `*SockAddrIn`, `addrlen` (must be 16) | 0; port 0 = ephemeral; `-EADDRINUSE`, `-EADDRNOTAVAIL`, `-EINVAL` (already bound), `-ENOTSUP` (TCP), `-EFAULT` |
+| 203 | `connect` | `fd`, `*SockAddrIn`, `addrlen` (must be 16) | 0; `-EINVAL`, `-EAFNOSUPPORT`, `-ENOTSOCK`, `-EISCONN`, `-ENETUNREACH`, `-EHOSTUNREACH`, `-ECONNREFUSED`, `-ETIMEDOUT`, `-EAGAIN`; a UDP descriptor is `-ENOTSUP` |
+| 206 | `sendto` | `fd`, `buf`, `len`, `flags` (0; UDP also accepts `MSG_DONTWAIT=0x40`), `dest` (TCP: 0 or validated/ignored; UDP: mandatory), `addrlen` | bytes sent; TCP: `-ENOTCONN`, `-EPIPE`, `-ECONNRESET`, `-ETIMEDOUT`; UDP: `-EDESTADDRREQ`, `-EMSGSIZE` (>1024 B), `-EHOSTUNREACH`, `-ENETUNREACH`; the `send` shape |
+| 207 | `recvfrom` | `fd`, `buf`, `len`, `flags` (TCP: 0; UDP: 0 or `MSG_DONTWAIT`), `src` (0, or filled with the peer/source), `*addrlen` | bytes; TCP: **`-EAGAIN` when nothing is queued yet**, 0 = peer closed; UDP: blocks (bounded ~10 s) or `-EAGAIN` with `MSG_DONTWAIT`/`SOCK_NONBLOCK`; the `recv` shape |
 | 208 | `setsockopt` | `fd`, `level`, `optname`, `optval`, `optlen` | 0 for `SO_REUSEADDR`, `SO_KEEPALIVE`, `SO_RCVTIMEO`, `SO_SNDTIMEO`, `TCP_NODELAY` (validated and ignored); `-ENOPROTOOPT` otherwise |
-| 209 | `getsockopt` | `fd`, `level`, `optname`, `optval`, `*optlen` | 0 for `SO_TYPE` (`SOCK_STREAM`), `SO_ERROR` (0), `SO_RCVTIMEO`/`SO_SNDTIMEO` (0), `TCP_NODELAY` (0); `-ENOPROTOOPT` otherwise |
+| 209 | `getsockopt` | `fd`, `level`, `optname`, `optval`, `*optlen` | 0 for `SO_TYPE` (`SOCK_STREAM`/`SOCK_DGRAM`), `SO_ERROR` (0), `SO_RCVTIMEO`/`SO_SNDTIMEO` (0), `TCP_NODELAY` (0); `-ENOPROTOOPT` otherwise |
 | 210 | `shutdown` | `fd`, `how` (0 read, 1 write, 2 both) | 0; both directions close (no half-close), the descriptor stays open: later `read` is 0, `write` is `-EPIPE` |
 | 1000 | `fork` | — | pagh-native number: duplicate the process (deep-copied user pages into a new Sv39 root/ASID, fd table with pipe refs/socket ENOTSUP, handlers/masks/altstack; no pending/siblings). Parent gets pid > 0, child 0, both continue at `sepc+4`; `-EAGAIN`/`-EINVAL` |
 | 221 | `execve` | `path` (absolute), `argv` (NULL-terminated user array), `envp` | replaces image/stack/heap/mmap; pid/ppid/fds/blocked mask kept, handlers reset, altstack off, pending cleared, siblings retired; returns only on error (`-ENOENT`/`-ENOEXEC`/`-EISDIR`/`-E2BIG`/`-EFAULT`/`-ENOMEM`) without changing the image |
@@ -156,39 +157,55 @@ Flags: `O_RDONLY=0`, `O_WRONLY=1`, `O_RDWR=2`, `O_CREAT=0x40`,
 `mode` on `openat` is applied only with `O_CREAT` and is currently ignored (see
 "Directory mutations").
 
-Socket constants: `AF_INET=2`, `SOCK_STREAM=1`, `SHUT_RD=0`, `SHUT_WR=1`,
+Socket constants: `AF_INET=2`, `SOCK_STREAM=1`, `SOCK_DGRAM=2`,
+`SOCK_NONBLOCK=0x800`, `MSG_DONTWAIT=0x40`, `SHUT_RD=0`, `SHUT_WR=1`,
 `SHUT_RDWR=2`; `SOL_SOCKET=1`, `IPPROTO_TCP=6`, `SO_REUSEADDR=2`, `SO_TYPE=3`,
 `SO_ERROR=4`, `SO_KEEPALIVE=9`, `SO_RCVTIMEO=20`, `SO_SNDTIMEO=21`,
-`TCP_NODELAY=1`.
+`TCP_NODELAY=1`. The largest UDP payload is 1024 bytes.
 
 ### BSD sockets
 
-The kernel implements one **active-open IPv4 TCP client**, so the socket ABI is
-deliberately one connection wide:
+The kernel implements one **active-open IPv4 TCP client** and userland
+**UDP datagram sockets**:
 
-* `AF_INET` + `SOCK_STREAM` + protocol 0 only. A second `socket()` while a
-  socket descriptor is open is `-ENOSPC`; `close` frees the slot, and the next
-  `socket()` gets a fresh local port.
+* `AF_INET` + `SOCK_STREAM` + protocol 0 only for TCP. A second stream `socket()`
+  while one is open is `-ENOSPC`; `close` frees the slot, and the next
+  `socket()` gets a fresh local port. `AF_INET` + `SOCK_DGRAM` creates a UDP
+  socket; any number may be open, and `SOCK_NONBLOCK` may be ORed into the type.
+* `bind` (200) gives a UDP socket a local port: `addrlen` is exactly 16, the
+  address is `0.0.0.0` or the interface's DHCP lease, and port 0 picks an
+  ephemeral port in 32768..=60999. A port owned by another socket is
+  `-EADDRINUSE`; binding twice is `-EINVAL`. The first `sendto` on an unbound
+  socket auto-binds it.
 * `connect` takes a 16-byte `SockAddrIn`; the kernel validates the user range,
   the exact length, the family, and reads the port big-endian. **IPv4 literals
   only** — there is no `getaddrinfo`, DNS syscall or `/etc/hosts` in this layer.
   `connect` polls the NIC until the handshake completes or the TCP client's own
   deadline fires; it returns only after success or a mapped errno.
-* `send`/`sendto` are synchronous: the kernel waits for the peer's
+* TCP `send`/`sendto` are synchronous: the kernel waits for the peer's
   acknowledgement, polling the NIC, and a completed call means the bytes left
-  the machine. `write` on a socket is the same path. `flags` must be 0; a
+  the machine. `write` on a TCP socket is the same path. `flags` must be 0; a
   non-zero `dest` is validated and ignored (the stream is already connected).
-* `recv`/`recvfrom` are **non-blocking**: `-EAGAIN` means "nothing queued yet,
-  call again", and 0 means the peer closed. `read` on a socket is the same path.
-  A finite `src` is filled with the peer address and `*addrlen` is set to 16.
+* TCP `recv`/`recvfrom` are **non-blocking**: `-EAGAIN` means "nothing queued
+  yet, call again", and 0 means the peer closed. `read` on a TCP socket is the
+  same path. A finite `src` is filled with the peer address and `*addrlen` is
+  set to 16.
+* UDP `sendto` requires a destination, accepts 0 or `MSG_DONTWAIT`, and a payload
+  up to 1024 bytes (`-EMSGSIZE` above that; no fragmentation). UDP `recvfrom`
+  blocks by default — the kernel polls the NIC with interrupts enabled under a
+  ~10 s budget, then answers `-EAGAIN` — and `MSG_DONTWAIT` (or the descriptor's
+  `SOCK_NONBLOCK`) makes it a single poll. The source address is filled and
+  `*addrlen` is set to 16. Each bound port has a 4-datagram queue; a fifth
+  arrival drops the oldest. `read` on a UDP socket is `recv` with no source and
+  no flags; `write` is `-EDESTADDRREQ` (no UDP `connect`).
 * `shutdown` closes both directions (no `SHUT_WR` half-close): later reads
   return 0 and later writes `-EPIPE`; the descriptor stays open until `close`.
 * `setsockopt` accepts the common BSD options and ignores them (the kernel's
   bounds are fixed); `getsockopt` reports `SO_TYPE = SOCK_STREAM` and zero for
   the rest. Unknown level/option is `-ENOPROTOOPT`, never silently accepted.
-* `bind`, `listen`, `accept`, `socketpair`, UDP (`SOCK_DGRAM`), IPv6, `poll`/
-  `select`, `sendmsg`/`recvmsg` and TLS are **not implemented**; their numbers
-  are unknown to the kernel and answer `-ENOSYS`.
+* `listen`, `accept`, `socketpair`, UDP `connect`, IPv6, `select`, `sendmsg`/
+  `recvmsg` and TLS are **not implemented**; their numbers are unknown to the
+  kernel and answer `-ENOSYS`. UDP `connect` is `-ENOTSUP`.
 * The kernel state happens to survive a program exit, but a run ends by closing
   any socket the program left open: the descriptor table is per run, and the
   next program starts with no connection.
@@ -222,7 +239,8 @@ EISCONN=106 ENOTCONN=107 ETIMEDOUT=110 ECONNREFUSED=111 EHOSTUNREACH=113`.
 * `io`: `Read`, `Write`, `Seek` traits and `Stdin`, `Stdout`.
 * `net`: `Ipv4` (literal, `Ipv4::parse`) and `TcpStream::connect(host, port)`
   with `Read`/`Write` (non-blocking `read`: retry on `EAGAIN`), `read_to_end`
-  and `shutdown`. No listener, UDP, DNS or TLS; see the socket subsection above.
+  and `shutdown`, plus `bind`/`sendto`/`recvfrom` for UDP. No listener, DNS or
+  TLS; see the socket subsection above.
 * Panics print `program: panic at <loc>` to fd 2 and `exit(101)`; no unwinding.
 * The ABI has threads, fork/exec/wait, signals, mmap/mprotect, poll and futexes; what it still lacks is a dynamic loader in the kernel (userland `ld-pagh` covers that), file-backed mmap and a general socket server API.
 

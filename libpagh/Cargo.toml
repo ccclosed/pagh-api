@@ -21,6 +21,10 @@ name = "http_get"
 path = "../examples/http_get.rs"
 
 [[example]]
+name = "udp_echo"
+path = "../examples/udp_echo.rs"
+
+[[example]]
 name = "threads"
 path = "../examples/threads.rs"
 
