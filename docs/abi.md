@@ -60,8 +60,10 @@ current user address space; a bad pointer returns `-EFAULT` and never faults.
 | 276 | `renameat2` | `olddirfd`, `oldpath`, `newdirfd`, `newpath`, `flags` (must be 0) | 0; `-EEXIST`, `-ENOENT`, `-ENOTEMPTY`, `-EISDIR`, `-ENOTSUP` |
 | 53 | `fchmodat` | `dirfd` (ignored), `path`, `mode` (`& 0o7777`), `flags` (must be 0) | 0; mode is per-run and visible to `fstat`, not persisted; `-ENOTSUP` on a synthetic node |
 | 46 | `ftruncate` | `fd`, `length` | 0; `-EINVAL` for fd 0/1/2, `-EBADF` (read-only fd), `-EISDIR` |
-| 198 | `socket` | `domain` (`AF_INET=2`), `type` (`SOCK_STREAM=1` or `SOCK_DGRAM=2`, optionally ORed with `SOCK_NONBLOCK=0x800` for DGRAM), `protocol` (0) | fd ≥ 3; `-EAFNOSUPPORT` for any other combination; a second stream socket while one is open is `-ENOSPC`; any number of datagram sockets |
-| 200 | `bind` | `fd` (UDP), `*SockAddrIn`, `addrlen` (must be 16) | 0; port 0 = ephemeral; `-EADDRINUSE`, `-EADDRNOTAVAIL`, `-EINVAL` (already bound), `-ENOTSUP` (TCP), `-EFAULT` |
+| 198 | `socket` | `domain` (`AF_INET=2`), `type` (`SOCK_STREAM=1` or `SOCK_DGRAM=2`, optionally ORed with `SOCK_NONBLOCK=0x800`), `protocol` (0) | fd ≥ 3; `-EAFNOSUPPORT` for any other combination; one active-open client stream descriptor at a time (a second `socket()` while it exists is `-ENOSPC`; listeners and accepted connections have their own descriptors); any number of datagram sockets |
+| 200 | `bind` | `fd` (UDP or a not-yet-listening stream socket), `*SockAddrIn`, `addrlen` (must be 16) | 0; port 0 = ephemeral; UDP: `-EADDRINUSE`, `-EADDRNOTAVAIL`, `-EINVAL` (already bound); stream: the port is reserved for `listen`, a second listener reservation is `-EADDRINUSE`, binding a connected/listening descriptor is `-EINVAL`; `-EFAULT` |
+| 201 | `listen` | `fd` (stream socket bound with 200), `backlog` | 0; `backlog` is clamped to `1..=4` (one listener, fixed four-entry accept queue); a second `listen` updates the backlog; unbound/connected descriptor `-EINVAL`; UDP `-ENOTSUP` |
+| 202 | `accept` | `fd` (listening stream), `*SockAddrIn` (optional), `*socklen_t` (optional, capacity ≥ 16) | new fd ≥ 3 and the peer's 16-byte address with `*addrlen = 16`; blocks polling up to 30 s then `-EAGAIN`; a `SOCK_NONBLOCK` listener answers `-EAGAIN` immediately; `-EINVAL`/`-ENOTSUP`/`-EFAULT` |
 | 203 | `connect` | `fd`, `*SockAddrIn`, `addrlen` (must be 16) | 0; `-EINVAL`, `-EAFNOSUPPORT`, `-ENOTSOCK`, `-EISCONN`, `-ENETUNREACH`, `-EHOSTUNREACH`, `-ECONNREFUSED`, `-ETIMEDOUT`, `-EAGAIN`; a UDP descriptor is `-ENOTSUP` |
 | 206 | `sendto` | `fd`, `buf`, `len`, `flags` (0; UDP also accepts `MSG_DONTWAIT=0x40`), `dest` (TCP: 0 or validated/ignored; UDP: mandatory), `addrlen` | bytes sent; TCP: `-ENOTCONN`, `-EPIPE`, `-ECONNRESET`, `-ETIMEDOUT`; UDP: `-EDESTADDRREQ`, `-EMSGSIZE` (>1024 B), `-EHOSTUNREACH`, `-ENETUNREACH`; the `send` shape |
 | 207 | `recvfrom` | `fd`, `buf`, `len`, `flags` (TCP: 0; UDP: 0 or `MSG_DONTWAIT`), `src` (0, or filled with the peer/source), `*addrlen` | bytes; TCP: **`-EAGAIN` when nothing is queued yet**, 0 = peer closed; UDP: blocks (bounded ~10 s) or `-EAGAIN` with `MSG_DONTWAIT`/`SOCK_NONBLOCK`; the `recv` shape |
@@ -168,15 +170,29 @@ Socket constants: `AF_INET=2`, `SOCK_STREAM=1`, `SOCK_DGRAM=2`,
 The kernel implements one **active-open IPv4 TCP client** and userland
 **UDP datagram sockets**:
 
-* `AF_INET` + `SOCK_STREAM` + protocol 0 only for TCP. A second stream `socket()`
-  while one is open is `-ENOSPC`; `close` frees the slot, and the next
-  `socket()` gets a fresh local port. `AF_INET` + `SOCK_DGRAM` creates a UDP
-  socket; any number may be open, and `SOCK_NONBLOCK` may be ORed into the type.
+* `AF_INET` + `SOCK_STREAM` + protocol 0 is TCP. One **active-open client**
+  descriptor may exist at a time (a second `socket()` while it exists is
+  `-ENOSPC`); listeners and accepted connections are separate descriptor kinds,
+  so a server can hold a listener and several accepted streams. `close` frees
+  the slot, and the next client `socket()` gets a fresh local port.
+  `AF_INET` + `SOCK_DGRAM` creates a UDP socket; any number may be open, and
+  `SOCK_NONBLOCK` may be ORed into the type.
 * `bind` (200) gives a UDP socket a local port: `addrlen` is exactly 16, the
   address is `0.0.0.0` or the interface's DHCP lease, and port 0 picks an
-  ephemeral port in 32768..=60999. A port owned by another socket is
-  `-EADDRINUSE`; binding twice is `-EINVAL`. The first `sendto` on an unbound
-  socket auto-binds it.
+  ephemeral port. A port owned by another socket is `-EADDRINUSE`; binding
+  twice is `-EINVAL`. The first `sendto` on an unbound socket auto-binds it.
+  On a stream socket the same call reserves the local port for `listen`
+  (one listener reservation at a time). Binding a connected socket or a
+  listener is `-EINVAL`.
+* `listen` (201) turns that reserved port into a passive socket. The kernel has
+  one listener and a fixed four-entry accept queue; `backlog` is clamped to
+  `1..=4`, and a handshake that completes while the queue is full is reset.
+  `accept` (202) returns the oldest queued connection as a new `SOCK_STREAM`
+  descriptor, with the peer's `SockAddrIn`; the wait polls the NIC for up to
+  30 s and then returns `-EAGAIN`, while a listener created with
+  `SOCK_NONBLOCK` returns `-EAGAIN` immediately on an empty queue. Accepted
+  streams use the ordinary `read`/`write`/`shutdown` paths, and closing one
+  sends FIN (or RST for a half-open passive connection).
 * `connect` takes a 16-byte `SockAddrIn`; the kernel validates the user range,
   the exact length, the family, and reads the port big-endian. **IPv4 literals
   only** — there is no `getaddrinfo`, DNS syscall or `/etc/hosts` in this layer.
@@ -203,9 +219,14 @@ The kernel implements one **active-open IPv4 TCP client** and userland
 * `setsockopt` accepts the common BSD options and ignores them (the kernel's
   bounds are fixed); `getsockopt` reports `SO_TYPE = SOCK_STREAM` and zero for
   the rest. Unknown level/option is `-ENOPROTOOPT`, never silently accepted.
-* `listen`, `accept`, `socketpair`, UDP `connect`, IPv6, `select`, `sendmsg`/
-  `recvmsg` and TLS are **not implemented**; their numbers are unknown to the
-  kernel and answer `-ENOSYS`. UDP `connect` is `-ENOTSUP`.
+* `socketpair`, UDP `connect`, IPv6, `select`, `sendmsg`/`recvmsg` and TLS are
+  **not implemented**; their numbers are unknown to the kernel and answer
+  `-ENOSYS`. UDP `connect` is `-ENOTSUP`. The TCP limits are exact: one
+  listener, one bind reservation, backlog ≤ 4, eight connection slots shared by
+  the active client and passive connections, one 4 KiB receive buffer per
+  connection, no out-of-order reassembly, no congestion control and no
+  TIME_WAIT. A listener close resets connections that were never accepted and
+  leaves accepted streams alone.
 * The kernel state happens to survive a program exit, but a run ends by closing
   any socket the program left open: the descriptor table is per run, and the
   next program starts with no connection.
@@ -239,10 +260,11 @@ EISCONN=106 ENOTCONN=107 ETIMEDOUT=110 ECONNREFUSED=111 EHOSTUNREACH=113`.
 * `io`: `Read`, `Write`, `Seek` traits and `Stdin`, `Stdout`.
 * `net`: `Ipv4` (literal, `Ipv4::parse`) and `TcpStream::connect(host, port)`
   with `Read`/`Write` (non-blocking `read`: retry on `EAGAIN`), `read_to_end`
-  and `shutdown`, plus `bind`/`sendto`/`recvfrom` for UDP. No listener, DNS or
-  TLS; see the socket subsection above.
+  and `shutdown`, plus `bind`/`listen`/`accept` for a TCP server and
+  `bind`/`sendto`/`recvfrom` for UDP. No DNS or TLS; see the socket subsection
+  above.
 * Panics print `program: panic at <loc>` to fd 2 and `exit(101)`; no unwinding.
-* The ABI has threads, fork/exec/wait, signals, mmap/mprotect, poll and futexes; what it still lacks is a dynamic loader in the kernel (userland `ld-pagh` covers that), file-backed mmap and a general socket server API.
+* The ABI has threads, fork/exec/wait, signals, mmap/mprotect, poll, futexes and a bounded TCP server API. What it still lacks is a dynamic loader in the kernel (userland `ld-pagh` covers that) and file-backed mmap.
 
 ## 5. Program pack format (`pagh-programs`)
 

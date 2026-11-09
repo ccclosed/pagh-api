@@ -25,6 +25,10 @@ name = "udp_echo"
 path = "../examples/udp_echo.rs"
 
 [[example]]
+name = "tcp_echo"
+path = "../examples/tcp_echo.rs"
+
+[[example]]
 name = "threads"
 path = "../examples/threads.rs"
 

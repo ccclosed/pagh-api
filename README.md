@@ -16,13 +16,14 @@ libpagh/src/rt.rs    _start, разбор argc/argv/envp, паника
 libpagh/src/alloc_impl.rs  bump-аллокатор на brk
 libpagh/src/io.rs    Read/Write/Seek, Stdin/Stdout/Stderr
 libpagh/src/fs.rs    File, Dir/DirEntry, stat, read_link
-libpagh/src/net.rs   Ipv4, TcpStream (один активный TCP-клиент) и UdpSocket (bind/sendto/recvfrom)
+libpagh/src/net.rs   Ipv4, TcpStream (один активный TCP-клиент), TcpListener (bind/listen/accept) и UdpSocket (bind/sendto/recvfrom)
 libpagh/src/path.rs  normalize/resolve относительно PWD
 libpagh/src/env.rs   args(), var(), current_dir()
 libpagh/src/print.rs print!/println!/eprintln!
 examples/hello.rs    пример программы
 examples/http_get.rs HTTP/1.0 GET на 10.0.2.2:8000 (нативный TCP-сокет)
 examples/udp_echo.rs UDP bind/sendto/recvfrom на 10.0.2.2:9000 (нативный UDP-сокет)
+examples/tcp_echo.rs TCP-сервер: bind 0.0.0.0, listen(4), accept одного host-подключения, echo
 examples/mutex.rs    четыре потока под futex Mutex (counter=1000)
 tools/check_abi.py   сверка чисел в docs/abi.md с sys.rs/errno.rs/abi.rs
 ```
@@ -41,6 +42,8 @@ rustup run nightly-2026-07-12 cargo build --release \
     --example http_get --target riscv64gc-unknown-none-elf   # ELF examples/http_get
 rustup run nightly-2026-07-12 cargo build --release \
     --example udp_echo --target riscv64gc-unknown-none-elf   # ELF examples/udp_echo
+rustup run nightly-2026-07-12 cargo build --release \
+    --example tcp_echo --target riscv64gc-unknown-none-elf   # ELF examples/tcp_echo
 python3 tools/check_abi.py                                   # дрейф ABI
 ```
 
@@ -54,6 +57,9 @@ python3 tools/check_abi.py                                   # дрейф ABI
 потому что DNS в ABI нет. `examples/udp_echo.rs` — UDP-пара: `UdpSocket::bind`
 на локальный порт, `send_to` на `10.0.2.2:9000`, блокирующий `recv_from`;
 живой прогон — `tools/test_udp.py` ядра (host-эхо + ext2-образ).
+`examples/tcp_echo.rs` — TCP-сервер: `TcpListener::bind_with_backlog` на
+`0.0.0.0:45679` (backlog 4), один `accept`, чтение до EOF и echo; живой прогон —
+`tools/test_tcp_server.py` ядра (`mke2fs -d` + QEMU `hostfwd`).
 
 `pagh-user.ld` повторяет `pagh-riscv/userland/user.ld`: образ начинается с
 `0x1_0000`, `_start` лежит первым в `.text.entry`, `.text`/`.rodata` дают
@@ -110,11 +116,11 @@ libpagh = { path = "../pagh-api/libpagh" }
 
 | Модуль | Что даёт |
 |---|---|
-| `sys` | `read write openat close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat getpid sched_yield exit` + `mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate` + `socket bind connect sendto recvfrom send recv shutdown`; все, кроме `exit`, возвращают `Result<T, Errno>`; незнакомый ядру номер даёт `ENOSYS` |
+| `sys` | `read write openat close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat getpid sched_yield exit` + `mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate` + `socket bind listen accept connect sendto recvfrom send recv shutdown`; все, кроме `exit`, возвращают `Result<T, Errno>`; незнакомый ядру номер даёт `ENOSYS` |
 | `abi` | `Stat` (24 B), `Timespec` (16 B), `Uname` (80 B), `SockAddrIn` (16 B), `EntryKind`, `Dirent`-константы; размеры проверяются `const assert` |
 | `errno` | 31 errno из ABI + `Errno::Unknown` для дрейфа; `Display` с текстами для CLI |
 | `io` | `Read`/`Write`/`Seek`, `Stdin`/`Stdout`/`Stderr`, `copy`, `SeekFrom` |
-| `net` | `Ipv4` (литерал и `Ipv4::parse`), `TcpStream::connect(host, port)`, `Read`/`Write` (неблокирующий `read`: `EAGAIN` → повтор), `read_to_end`, `shutdown`; `UdpSocket::bind`/`bind_to`, `send_to`, `recv_from`/`recv_from_nonblocking`; только IPv4-литералы, одно TCP-соединение, UDP ≤ 1024 B, без `TcpListener`/DNS/TLS |
+| `net` | `Ipv4` (литерал и `Ipv4::parse`), `TcpStream::connect(host, port)`, `Read`/`Write` (неблокирующий `read`: `EAGAIN` → повтор), `read_to_end`, `shutdown`; `TcpListener::bind`/`bind_to`/`bind_with_backlog`/`bind_nonblocking` и `accept` (peer `SockAddrIn`); `UdpSocket::bind`/`bind_to`, `send_to`, `recv_from`/`recv_from_nonblocking`; только IPv4-литералы, один listener + принятые соединения, UDP ≤ 1024 B, без DNS/TLS |
 | `fs` | `File::open/create/open_with`, `File::set_len`, `read_to_end`, `read_to_string`, `write`/`write_all`, `create_dir`/`create_dir_all`, `remove_file`/`remove_dir`, `rename`, `hard_link`, `symlink`, `truncate` (по пути), `set_permissions`, `stat`, `read_link`, `Dir`/`DirEntry` поверх `getdents64` |
 | `path` | `normalize`, `resolve` (относительно `PWD`), `join`, `basename`, `dirname`, `Path` |
 | `env` | `args()` (включая `argv[0]`), `vars()`, `var("PWD")`, `current_dir()`, `program_name()` |
@@ -171,14 +177,17 @@ EOF не выдаёт — `cat` без файлов будет ждать вво
 режим живёт только до конца прогона (см. ниже).
 
 Сокеты: один **активный** TCP-клиент (`AF_INET` + `SOCK_STREAM`, `connect` по
-IPv4-литералу, `send`/`recv`, `shutdown`) и UDP (`AF_INET` + `SOCK_DGRAM`,
-`bind`, `sendto`, блокирующий/неблокирующий `recvfrom`). Нет
-`listen`/`accept`, UDP-`connect`, IPv6, DNS/`getaddrinfo`, `sendmsg`/`recvmsg` и
-TLS; второе TCP-соединение одновременно невозможно. `poll` на socket-fd
-работает (готовность к чтению/записи). TCP `recv` неблокирующий (`EAGAIN` —
-повторить), `shutdown` закрывает оба направления; UDP `recvfrom` ждёт до
-дейтаграммы или ~10 s, `MSG_DONTWAIT`/`SOCK_NONBLOCK` даёт `EAGAIN`.
-`setsockopt` для типовых `SO_*`/`TCP_NODELAY` принимается и игнорируется.
+IPv4-литералу, `send`/`recv`, `shutdown`), TCP-сервер (`bind` + `listen(201)` +
+`accept(202)`, один listener, очередь ≤ 4, принятые соединения — отдельные
+дескрипторы) и UDP (`AF_INET` + `SOCK_DGRAM`, `bind`, `sendto`,
+блокирующий/неблокирующий `recvfrom`). Нет UDP-`connect`, IPv6,
+DNS/`getaddrinfo`, `sendmsg`/`recvmsg` и TLS; второе **активное**
+TCP-соединение одновременно невозможно. `poll` на socket-fd работает
+(готовность listener'а к `accept`, потока к чтению/записи). TCP `recv`
+неблокирующий (`EAGAIN` — повторить), `shutdown` закрывает оба направления;
+UDP `recvfrom` ждёт до дейтаграммы или ~10 s,
+`MSG_DONTWAIT`/`SOCK_NONBLOCK` даёт `EAGAIN`. `setsockopt` для типовых
+`SO_*`/`TCP_NODELAY` принимается и игнорируется.
 
 ## Осознанные решения и открытые вопросы ABI
 
@@ -230,16 +239,20 @@ TLS; второе TCP-соединение одновременно невозм
     наоборот, идёт по ссылке, как `chmod`. `AT_SYMLINK_NOFOLLOW` в ABI нет:
     ненулевые неизвестные флаги — `EINVAL`, а не тихий игнор.
 
-15. **Сокеты — один TCP-клиент и UDP.** `connect` принимает только
-    `sockaddr_in` (16 байт) с IPv4-литералом; DNS-а нет. TCP `recv`
-    неблокирующий по контракту `read(0)`: `EAGAIN` — это «пока нет данных»,
-    0 — EOF. `shutdown` не имеет half-close: оба направления закрываются,
-    дескриптор остаётся открытым (чтение → 0, запись → `EPIPE`) до `close`.
-    Второй TCP `socket()` при открытом первом — `ENOSPC`, потому что у ядра
-    одно соединение; UDP-сокетов можно много, `bind` даёт порт, `recvfrom` без
-    `MSG_DONTWAIT` блокируется. Это записано в `docs/abi.md`.
+15. **Сокеты — один активный TCP-клиент, TCP-сервер и UDP.** `connect`
+    принимает только `sockaddr_in` (16 байт) с IPv4-литералом; DNS-а нет. TCP
+    `recv` неблокирующий по контракту `read(0)`: `EAGAIN` — это «пока нет
+    данных», 0 — EOF. `shutdown` не имеет half-close: оба направления
+    закрываются, дескриптор остаётся открытым (чтение → 0, запись → `EPIPE`)
+    до `close`. Сервер: `bind` резервирует порт, `listen(201)` включает
+    пассивный приём (backlog ≤ 4), `accept(202)` отдаёт соединение и peer-адрес;
+    у ядра один listener, восемь слотов соединений (клиент + принятые) и 30 s
+    бюджет блокирующего `accept` (`SOCK_NONBLOCK` → сразу `EAGAIN`). Второй
+    **активный** TCP `socket()` при открытом первом — `ENOSPC`; UDP-сокетов
+    можно много, `bind` даёт порт, `recvfrom` без `MSG_DONTWAIT` блокируется.
+    Это записано в `docs/abi.md`.
 16. **Номера `setsockopt`/`getsockopt`.** В generic RISC-V таблице это 208/209;
-    200 — это `bind` (реализован для UDP), 201 — `listen` (в ABI нет).
+    200 — `bind`, 201 — `listen`, 202 — `accept`; 203 — `connect`.
     `tools/check_abi.py` сверяет таблицу с `sys.rs`, так что дрейф номеров не
     прошёл бы проверку.
 

@@ -1,10 +1,11 @@
 //! BSD sockets over the ABI's IPv4 stack (`docs/abi.md` §2).
 //!
-//! The kernel is one polled IPv4 TCP client plus userland UDP sockets: no
-//! listening TCP sockets, no DNS, no TLS. This module exposes an [`Ipv4`]
-//! literal (or [`Ipv4::parse`]), [`TcpStream`] (a connected descriptor with
-//! `read`/`write`/`shutdown`) and [`UdpSocket`] (bind, send one datagram,
-//! receive one datagram).
+//! The kernel is a polled IPv4 stack with one active-open TCP client, one TCP
+//! listener with a bounded accept queue, and userland UDP sockets: no DNS, no
+//! TLS. This module exposes an [`Ipv4`] literal (or [`Ipv4::parse`]),
+//! [`TcpStream`] (a connected descriptor with `read`/`write`/`shutdown`),
+//! [`TcpListener`] (bind + listen + accept) and [`UdpSocket`] (bind, send one
+//! datagram, receive one datagram).
 //!
 //! # The receive contract
 //!
@@ -25,12 +26,14 @@
 //!
 //! # What is not here
 //!
-//! No `TcpListener`/`accept`, no address resolution, no socket options, no
-//! timeouts configured by the program (the kernel's own bounds apply). The
-//! kernel keeps one TCP connection at a time, so a second
-//! [`TcpStream::connect`] while the first is open fails; drop the first stream
-//! (its destructor closes the descriptor) before connecting again. UDP has no
-//! `connect`, no `send`/`recv` on a connected datagram socket and no IPv6.
+//! No address resolution, no socket options, no timeouts configured by the
+//! program (the kernel's own bounds apply). The active-open client is one
+//! connection at a time, so a second [`TcpStream::connect`] while the first is
+//! open fails; drop the first stream (its destructor closes the descriptor)
+//! before connecting again. The listener is one per kernel with a four-entry
+//! accept queue; a server can hold several accepted [`TcpStream`]s, up to the
+//! kernel's eight-slot TCP table. UDP has no `connect`, no `send`/`recv` on a
+//! connected datagram socket and no IPv6.
 
 use alloc::vec::Vec;
 
@@ -48,6 +51,9 @@ use crate::sys;
 pub struct Ipv4(pub [u8; 4]);
 
 impl Ipv4 {
+    /// The wildcard address `0.0.0.0` (bind to every local address).
+    pub const ANY: Self = Self([0, 0, 0, 0]);
+
     /// Build an address from its four octets, in wire order.
     pub const fn new(octets: [u8; 4]) -> Self {
         Self(octets)
@@ -164,6 +170,13 @@ impl TcpStream {
     }
 }
 
+impl TcpStream {
+    /// Wrap a descriptor the kernel just returned from `accept`.
+    pub(crate) fn from_accepted(fd: i32) -> Self {
+        Self { fd, open: true }
+    }
+}
+
 impl Drop for TcpStream {
     fn drop(&mut self) {
         if self.open {
@@ -182,6 +195,93 @@ impl Read for TcpStream {
 impl Write for TcpStream {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         sys::send(self.fd, buf)
+    }
+}
+
+/// A listening TCP socket (one `AF_INET`/`SOCK_STREAM` descriptor).
+///
+/// [`TcpListener::bind`] performs the kernel's `bind(200)` and `listen(201)` in
+/// one call. [`accept`](TcpListener::accept) returns the next handshaken
+/// connection and its peer address; the kernel queues up to four of them
+/// (clamped `listen` backlog), and a connection that arrives while the queue is
+/// full is reset. Dropping the listener closes it and resets connections that
+/// were never accepted; accepted [`TcpStream`]s keep their own descriptors.
+#[derive(Debug)]
+pub struct TcpListener {
+    fd: i32,
+    open: bool,
+}
+
+impl TcpListener {
+    /// Create a stream socket, bind `0.0.0.0:port` and listen with backlog 4.
+    ///
+    /// Port 0 asks the kernel for an ephemeral port (there is no `getsockname`
+    /// to learn it, so a server should pass an explicit port).
+    pub fn bind(port: u16) -> Result<Self> {
+        Self::bind_with_backlog(Ipv4::ANY, port, 4)
+    }
+
+    /// Bind `address:port` and listen with backlog 4.
+    ///
+    /// `address` must be `0.0.0.0` or the interface's DHCP lease; anything else
+    /// is `EADDRNOTAVAIL`.
+    pub fn bind_to(address: Ipv4, port: u16) -> Result<Self> {
+        Self::bind_with_backlog(address, port, 4)
+    }
+
+    /// Bind `address:port` and listen with an explicit backlog.
+    ///
+    /// The kernel clamps `backlog` to `1..=4`, because the accept queue is a
+    /// fixed four-entry array.
+    pub fn bind_with_backlog(address: Ipv4, port: u16, backlog: u16) -> Result<Self> {
+        Self::create(address, port, backlog, false)
+    }
+
+    /// Bind `0.0.0.0:port` and listen, with `accept` in non-blocking mode.
+    ///
+    /// An `accept` with an empty queue returns [`Errno::EAGAIN`] immediately
+    /// instead of polling for the kernel's 30 s accept budget.
+    pub fn bind_nonblocking(port: u16) -> Result<Self> {
+        Self::create(Ipv4::ANY, port, 4, true)
+    }
+
+    fn create(address: Ipv4, port: u16, backlog: u16, nonblocking: bool) -> Result<Self> {
+        let kind = if nonblocking {
+            sys::SOCK_STREAM | sys::SOCK_NONBLOCK
+        } else {
+            sys::SOCK_STREAM
+        };
+        let fd = sys::socket(sys::AF_INET, kind, 0)?;
+        let listener = Self { fd, open: true };
+        // On error `listener` drops here and closes the fresh descriptor.
+        sys::bind(fd, &SockAddrIn::new(address.octets(), port))?;
+        sys::listen(fd, i32::from(backlog))?;
+        Ok(listener)
+    }
+
+    /// The underlying socket descriptor.
+    pub const fn fd(&self) -> i32 {
+        self.fd
+    }
+
+    /// Wait for one connection, returning its stream and peer address.
+    ///
+    /// The wait polls the kernel's NIC for up to 30 s and then returns
+    /// [`Errno::EAGAIN`]; a listener created with
+    /// [`TcpListener::bind_nonblocking`] returns `EAGAIN` immediately when the
+    /// queue is empty. The returned [`TcpStream`] owns its descriptor.
+    pub fn accept(&mut self) -> Result<(TcpStream, SockAddrIn)> {
+        let (fd, peer) = sys::accept(self.fd)?;
+        Ok((TcpStream::from_accepted(fd), peer))
+    }
+}
+
+impl Drop for TcpListener {
+    fn drop(&mut self) {
+        if self.open {
+            let _ = sys::close(self.fd);
+            self.open = false;
+        }
     }
 }
 

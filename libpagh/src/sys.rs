@@ -66,6 +66,10 @@ pub const SYS_RENAMEAT2: usize = 276;
 pub const SYS_SOCKET: usize = 198;
 /// `bind(fd, *sockaddr_in, addrlen)`.
 pub const SYS_BIND: usize = 200;
+/// `listen(fd, backlog)`.
+pub const SYS_LISTEN: usize = 201;
+/// `accept(fd, *sockaddr_in, *addrlen)`.
+pub const SYS_ACCEPT: usize = 202;
 /// `connect(fd, *sockaddr_in, addrlen)`.
 pub const SYS_CONNECT: usize = 203;
 /// `sendto(fd, buf, len, flags, dest, addrlen)` (the `send` shape on a
@@ -609,12 +613,13 @@ pub fn ftruncate(fd: i32, length: u64) -> Result<()> {
 
 /// `AF_INET`: the only address family the kernel accepts.
 pub const AF_INET: u16 = crate::abi::AF_INET;
-/// `SOCK_STREAM`: the one TCP client.
+/// `SOCK_STREAM`: a TCP socket (active client, listener or accepted stream).
 pub const SOCK_STREAM: u32 = crate::abi::SOCK_STREAM;
 /// `SOCK_DGRAM`: a UDP socket. It must be bound before `recv_from`.
 pub const SOCK_DGRAM: u32 = 2;
-/// `socket()` type bit: make the descriptor non-blocking. Accepted for
-/// `SOCK_DGRAM`; the stream receive path is already non-blocking.
+/// `socket()` type bit: make the descriptor non-blocking. It affects a UDP
+/// `recv_from` and a stream listener's `accept`; stream `recv` is already
+/// non-blocking by contract.
 pub const SOCK_NONBLOCK: u32 = 0x800;
 /// `recvfrom` flag: return `EAGAIN` instead of waiting for a datagram.
 pub const MSG_DONTWAIT: u32 = 0x40;
@@ -630,11 +635,13 @@ pub const SHUT_RDWR: u32 = 2;
 
 /// `socket(domain, type, protocol)`: create a BSD socket descriptor.
 ///
-/// `AF_INET` with protocol 0 accepts `SOCK_STREAM` (one TCP connection per
-/// run; a second stream socket is `ENOSPC`) and `SOCK_DGRAM` (UDP; any number
-/// may be open, and `SOCK_NONBLOCK` may be ORed into the type). Anything else
-/// is `EAFNOSUPPORT` (the kernel documents one answer rather than inventing
-/// per-field errnos).
+/// `AF_INET` with protocol 0 accepts `SOCK_STREAM` (one active-open client
+/// descriptor per run; a second stream socket while one exists is `ENOSPC` —
+/// listeners and accepted connections have their own descriptors) and
+/// `SOCK_DGRAM` (UDP; any number may be open). `SOCK_NONBLOCK` may be ORed into
+/// the type: it makes a UDP `recv_from` or a stream `accept` return `EAGAIN`
+/// instead of waiting. Anything else is `EAFNOSUPPORT` (the kernel documents
+/// one answer rather than inventing per-field errnos).
 pub fn socket(domain: u16, kind: u32, protocol: u32) -> Result<i32> {
     // SAFETY: all arguments are plain integers; no pointers.
     let ret = unsafe {
@@ -677,9 +684,11 @@ pub fn connect(fd: i32, address: &SockAddrIn) -> Result<()> {
 /// `bind(fd, *sockaddr_in, sizeof(sockaddr_in))` for a UDP socket.
 ///
 /// `address` may use `0.0.0.0` (any local address) or the interface's DHCP
-/// lease; port 0 asks the kernel for an ephemeral port. Binding a port another
-/// socket owns is `EADDRINUSE`; binding twice is `EINVAL`; a TCP descriptor is
-/// `ENOTSUP`.
+/// lease; port 0 asks the kernel for an ephemeral port. On a UDP socket binding
+/// a port another socket owns is `EADDRINUSE` and binding twice is `EINVAL`.
+/// On a stream socket the port is reserved for [`listen`]; binding twice, a
+/// connected socket or a listener is `EINVAL`, and a second live listener
+/// reservation is `EADDRINUSE`.
 pub fn bind(fd: i32, address: &SockAddrIn) -> Result<()> {
     // SAFETY: `address` is a live, correctly aligned `SockAddrIn`; the kernel
     // copies exactly 16 bytes and validates the family and port.
@@ -695,6 +704,52 @@ pub fn bind(fd: i32, address: &SockAddrIn) -> Result<()> {
         )
     };
     check(ret).map(|_| ())
+}
+
+/// `listen(fd, backlog)`: make a bound stream socket passive.
+///
+/// Only a stream socket that has been bound with [`bind`] can listen. The
+/// kernel has one listener; `backlog` is clamped to `1..=4`, its fixed accept
+/// queue depth. A second `listen` on the same descriptor updates the backlog.
+pub fn listen(fd: i32, backlog: i32) -> Result<()> {
+    // SAFETY: no pointer arguments; the kernel validates the descriptor and
+    // clamps the backlog.
+    let ret = unsafe {
+        syscall6(
+            SYS_LISTEN,
+            fd as isize as usize,
+            backlog as isize as usize,
+            0,
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}
+
+/// `accept(fd, *sockaddr_in, *addrlen)`: take one handshaken connection.
+///
+/// Blocks (polling the NIC) until a connection is queued, then returns its
+/// descriptor and peer address. A listener created non-blocking answers
+/// [`Errno::EAGAIN`] immediately when the queue is empty.
+pub fn accept(fd: i32) -> Result<(i32, SockAddrIn)> {
+    let mut peer = SockAddrIn::new([0; 4], 0);
+    let mut length = core::mem::size_of::<SockAddrIn>() as u32;
+    // SAFETY: `peer` and `length` are live for the call; the kernel validates
+    // both ranges before writing.
+    let ret = unsafe {
+        syscall6(
+            SYS_ACCEPT,
+            fd as isize as usize,
+            &mut peer as *mut SockAddrIn as usize,
+            &mut length as *mut u32 as usize,
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|new_fd| (new_fd as i32, peer))
 }
 
 /// `sendto(fd, buf, len, 0, *sockaddr_in, 16)`: send one UDP datagram.
