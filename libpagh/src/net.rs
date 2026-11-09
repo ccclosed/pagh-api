@@ -175,6 +175,16 @@ impl TcpStream {
     pub(crate) fn from_accepted(fd: i32) -> Self {
         Self { fd, open: true }
     }
+
+    /// Give up the descriptor without closing it.
+    ///
+    /// Used exactly once, by [`crate::tls::TlsStream::connect`]: the TLS session
+    /// owns the connection from the handshake on, so the socket must stop
+    /// pretending it will close it. `open = false` disarms the `Drop` above.
+    pub(crate) fn into_fd(mut self) -> i32 {
+        self.open = false;
+        self.fd
+    }
 }
 
 impl Drop for TcpStream {

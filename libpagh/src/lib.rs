@@ -25,10 +25,13 @@
 //! # Not provided
 //!
 //! Threads and futexes exist ([`thread`]); fork, signals and dynamic linking
-//! do not. Sockets are one connected IPv4 TCP client ([`net::TcpStream`]) and
-//! bound UDP datagram sockets ([`net::UdpSocket`]); there is no listening
-//! socket, UDP `connect`, DNS or TLS. See `docs/abi.md` §2/§4 and the README's
-//! "What is not supported" list.
+//! do not. Sockets are a connected IPv4 TCP client ([`net::TcpStream`]), a TCP
+//! listener ([`net::TcpListener`]) and bound UDP datagram sockets
+//! ([`net::UdpSocket`]); [`dns`] resolves `A` records over one of those UDP
+//! sockets, and [`tls::TlsStream`] puts a kernel-verified TLS 1.3 session on a
+//! connected TCP descriptor (there is no UDP `connect`). [`random`] is the
+//! kernel entropy pool. See `docs/abi.md` §2/§4 and the README's "What is not
+//! supported" list.
 //!
 //! Every `unsafe` block carries a `SAFETY:` comment; the small number of them
 //! is intentional.
@@ -41,6 +44,7 @@ extern crate alloc;
 
 pub mod abi;
 mod alloc_impl;
+pub mod dns;
 pub mod env;
 pub mod errno;
 pub mod fs;
@@ -48,10 +52,12 @@ pub mod io;
 pub mod net;
 pub mod path;
 pub mod print;
-pub mod thread;
+pub mod random;
 mod rt;
 pub mod sync;
 pub mod sys;
+pub mod thread;
+pub mod tls;
 
 pub use abi::{EntryKind, SockAddrIn, Stat, Timespec, Uname};
 pub use errno::{Errno, Result};

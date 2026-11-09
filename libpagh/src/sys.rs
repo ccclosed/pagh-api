@@ -84,6 +84,24 @@ pub const SYS_SETSOCKOPT: usize = 208;
 pub const SYS_GETSOCKOPT: usize = 209;
 /// `shutdown(fd, how)`.
 pub const SYS_SHUTDOWN: usize = 210;
+/// `getrandom(buf, len, flags)` — the asm-generic RISC-V number; the pool is
+/// the kernel's own entropy source, the same one TLS draws session keys from.
+pub const SYS_GETRANDOM: usize = 278;
+/// `tls_connect(tcp_fd, host, host_len, flags)` — pagh-native (1100): the
+/// fail-closed TLS 1.3 handshake on an already-connected stream socket.
+pub const SYS_TLS_CONNECT: usize = 1100;
+/// `tls_write(fd, buf, len)` — pagh-native (1101): encrypt application data.
+pub const SYS_TLS_WRITE: usize = 1101;
+/// `tls_read(fd, buf, len)` — pagh-native (1102): decrypt application data.
+pub const SYS_TLS_READ: usize = 1102;
+/// `tls_close(fd)` — pagh-native (1103): `close_notify` and release.
+pub const SYS_TLS_CLOSE: usize = 1103;
+
+/// Most bytes one `getrandom` call returns (`MAX_GETRANDOM` in the kernel).
+///
+/// A larger request is answered with a short read at exactly this count; a
+/// caller that needs more must loop. [`crate::random::fill`] does.
+pub const GETRANDOM_MAX: usize = 64 * 1024;
 
 // ---------------------------------------------------------------------------
 // openat flags and lseek whence (frozen)
@@ -858,6 +876,133 @@ pub fn shutdown(fd: i32, how: u32) -> Result<()> {
     // SAFETY: no pointer arguments; the kernel validates the descriptor and
     // the `how` value.
     let ret = unsafe { syscall6(SYS_SHUTDOWN, fd as isize as usize, how as usize, 0, 0, 0, 0) };
+    check(ret).map(|_| ())
+}
+
+/// `getrandom(2)`: fill `buf` from the kernel entropy pool and return how many
+/// bytes were written.
+///
+/// `flags` must be 0 — the ABI defines none, and any other value is
+/// [`Errno::EINVAL`] (so a caller cannot believe it asked for something the
+/// kernel ignored). [`Errno::EAGAIN`] means the pool was never seeded: the
+/// kernel refuses to invent randomness instead of returning predictable bytes.
+///
+/// A request longer than [`GETRANDOM_MAX`] is answered with a **short read** at
+/// that cap; loop (or use [`crate::random::fill`]) to get more. [`Errno::EFAULT`]
+/// never comes with a partially filled buffer: the kernel validates the whole
+/// range before the first byte is produced.
+pub fn getrandom(buf: &mut [u8], flags: u32) -> Result<usize> {
+    // SAFETY: `buf` is a live mutable slice for the duration of the call, and
+    // the kernel copies into it (validating the range) before returning.
+    let ret = unsafe {
+        syscall6(
+            SYS_GETRANDOM,
+            ptr_of(buf),
+            buf.len(),
+            flags as usize,
+            0,
+            0,
+            0,
+        )
+    };
+    check_len(ret, buf.len())
+}
+
+/// `tls_connect`: perform the fail-closed TLS 1.3 handshake on a **connected**
+/// stream socket and turn `fd` into a TLS session.
+///
+/// `host` is not resolved and no connection is opened — connect the socket
+/// first, exactly as for plain TCP. The name is what the handshake must
+/// authenticate: it goes out as SNI and the leaf's SAN entries must authorize
+/// it. There is no flag that relaxes verification, which is why this wrapper
+/// takes none.
+///
+/// Errors worth distinguishing: [`Errno::EKEYREJECTED`] (the certificate was
+/// rejected: chain, name, validity or `CertificateVerify`),
+/// [`Errno::EPROTO`] (the handshake itself failed), [`Errno::EAGAIN`] (no
+/// entropy seed), [`Errno::ENOTSUP`] (no wall clock), [`Errno::ENOTCONN`] (the
+/// socket is not connected), [`Errno::EINVAL`] (this descriptor already has a
+/// session, or the host name is empty/too long).
+///
+/// A refusal tears the connection down (RFC 8446 §6.1): the descriptor is left
+/// as a tombstone — release it with `close` and open a new socket to retry.
+pub fn tls_connect(fd: i32, host: &str) -> Result<()> {
+    // SAFETY: `host` is a live byte slice and its length is passed separately,
+    // so the kernel reads exactly those bytes (it validates the range and
+    // rejects interior NULs itself).
+    let ret = unsafe {
+        syscall6(
+            SYS_TLS_CONNECT,
+            fd as isize as usize,
+            ptr_of(host.as_bytes()),
+            host.len(),
+            0,
+            0,
+            0,
+        )
+    };
+    check(ret).map(|_| ())
+}
+
+/// `tls_write`: encrypt application data and hand it to the connection.
+///
+/// Blocks until the record layer accepted the bytes (bounded by the kernel's
+/// idle budget) and returns the number of plaintext bytes accepted — short only
+/// if the connection failed part-way, which a caller must treat as "the rest was
+/// not sent". [`Errno::EPIPE`] after a close, [`Errno::ECONNRESET`] when the
+/// peer reset the connection or the stream ended without `close_notify`,
+/// [`Errno::ETIMEDOUT`] when the peer stops acknowledging.
+pub fn tls_write(fd: i32, buf: &[u8]) -> Result<usize> {
+    // SAFETY: `buf` is a live shared slice; the kernel only reads from it.
+    let ret = unsafe {
+        syscall6(
+            SYS_TLS_WRITE,
+            fd as isize as usize,
+            ptr_of(buf),
+            buf.len(),
+            0,
+            0,
+            0,
+        )
+    };
+    check_len(ret, buf.len())
+}
+
+/// `tls_read`: decrypt application data into `buf`.
+///
+/// Blocks (bounded by the kernel's idle budget) until at least one byte is
+/// available, then returns up to one buffer of it; `Ok(0)` is end-of-stream, and
+/// it means the peer sent a `close_notify` — a TCP close **without** one is
+/// [`Errno::ECONNRESET`], not `Ok(0)`, because a truncated stream must not look
+/// like a complete response. [`Errno::EAGAIN`] means another thread of this
+/// process is already inside a call on the same session.
+pub fn tls_read(fd: i32, buf: &mut [u8]) -> Result<usize> {
+    // SAFETY: `buf` is a live mutable slice for the duration of the call, and
+    // the kernel copies into it (validating the range) before returning.
+    let ret = unsafe {
+        syscall6(
+            SYS_TLS_READ,
+            fd as isize as usize,
+            ptr_of(buf),
+            buf.len(),
+            0,
+            0,
+            0,
+        )
+    };
+    check_len(ret, buf.len())
+}
+
+/// `tls_close`: send `close_notify` (best effort), release the session and close
+/// the descriptor.
+///
+/// `Ok(())` means the session is gone; it does not promise the peer received the
+/// alert. `close(2)` on a TLS descriptor also releases it but skips the alert,
+/// because it runs at process teardown too and may not wait for a peer — this is
+/// the graceful close.
+pub fn tls_close(fd: i32) -> Result<()> {
+    // SAFETY: no pointer arguments; the kernel validates the descriptor.
+    let ret = unsafe { syscall6(SYS_TLS_CLOSE, fd as isize as usize, 0, 0, 0, 0, 0) };
     check(ret).map(|_| ())
 }
 

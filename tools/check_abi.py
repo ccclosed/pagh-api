@@ -243,6 +243,14 @@ def main() -> int:
         "rt_sigprocmask": 135,
         "rt_sigreturn": 139,
         "sigaltstack": 132,
+        # Kernel entropy and userland TLS (native-random-tls). `getrandom`
+        # keeps its asm-generic number; the four TLS calls are pagh-native,
+        # outside the Linux table like `fork`.
+        "getrandom": 278,
+        "tls_connect": 1100,
+        "tls_write": 1101,
+        "tls_read": 1102,
+        "tls_close": 1103,
         # Native processes (native-proc).
         "fork": 1000,
         "execve": 221,

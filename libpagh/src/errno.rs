@@ -78,6 +78,12 @@ pub enum Errno {
     EOVERFLOW = 75,
     /// Operation not supported.
     ENOTSUP = 95,
+    /// Protocol error: a TLS handshake or record that did not follow TLS 1.3.
+    EPROTO = 71,
+    /// The server's certificate was rejected: it does not chain to the
+    /// committed CA bundle, does not authorize the requested name, is outside
+    /// its validity window, or failed `CertificateVerify`.
+    EKEYREJECTED = 129,
     /// A negative result whose magnitude is not in the frozen table.
     ///
     /// This is a kernel/libpagh drift bug, not a normal error path. Callers
@@ -122,6 +128,8 @@ impl Errno {
             40 => Self::ELOOP,
             75 => Self::EOVERFLOW,
             95 => Self::ENOTSUP,
+            71 => Self::EPROTO,
+            129 => Self::EKEYREJECTED,
             _ => Self::Unknown,
         }
     }
@@ -168,6 +176,8 @@ impl Errno {
             Self::ELOOP => "Too many levels of symbolic links",
             Self::EOVERFLOW => "Value too large for the data type",
             Self::ENOTSUP => "Operation not supported",
+            Self::EPROTO => "Protocol error",
+            Self::EKEYREJECTED => "Certificate rejected by the trust decision",
             Self::Unknown => "Unknown error (outside the pagh ABI)",
         }
     }

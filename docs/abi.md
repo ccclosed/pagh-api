@@ -94,6 +94,11 @@ current user address space; a bad pointer returns `-EFAULT` and never faults.
 | 135 | `rt_sigprocmask` | `how` (`BLOCK=0`/`UNBLOCK=1`/`SETMASK=2`), `*mask` (u64), `*oldmask`, `sigsetsize=8` | 0 |
 | 139 | `rt_sigreturn` | — | restores the frame the kernel armed for this thread; `-EINVAL` outside a handler |
 | 132 | `sigaltstack` | `*SigAltStack` (`ss_sp`/`ss_flags`/`ss_size`), `*old` | 0; `SS_DISABLE`/`SS_ONSTACK`; `-ENOMEM`/`-EINVAL` for a bad range |
+| 278 | `getrandom` | `buf`, `len`, `flags` (must be 0) | bytes written; `-EINVAL` (unknown flag), `-EFAULT` (bad buffer, nothing written), `-EAGAIN` (the pool was never seeded); returns at most 65536 bytes per call — a **short read** otherwise, which the caller repeats |
+| 1100 | `tls_connect` | `tcp_fd` (a **connected** stream socket or an accepted connection), `host` (bytes, not NUL-terminated), `host_len` (1..=255), `flags` (must be 0) | 0; the same descriptor now carries a TLS 1.3 session. Fail-closed: the handshake aborts unless the chain reaches the committed CA bundle, the SAN authorizes `host`, the clock gate passes and `CertificateVerify` checks out. `-EBADF`/`-ENOTSOCK`/`-ENOTCONN`/`-EISCONN`/`-ENOTSUP` (wrong descriptor), `-EINVAL` (flags, host name), `-EFAULT`, `-EAGAIN` (no entropy seed), `-ENOTSUP` (no wall clock), `-EPROTO` (handshake), `-EKEYREJECTED` (certificate), `-ENOSPC` (no free session) |
+| 1101 | `tls_write` | `fd` (a TLS session), `buf`, `len` | plaintext bytes encrypted and handed to the record layer (short only after a failure); `-EINVAL` (not a TLS fd), `-EFAULT`, `-EPIPE` (closed), `-ECONNRESET`, `-ETIMEDOUT`, `-EAGAIN` (a concurrent call on the same session) |
+| 1102 | `tls_read` | `fd` (a TLS session), `buf`, `len` | plaintext bytes decrypted; **blocks** (bounded by the kernel's ~20 s idle budget) until some are available, returns at most 4096 per call; `0` = end of stream (`close_notify`); `-ECONNRESET` when the stream ended **without** one (truncation is not EOF), `-ETIMEDOUT`, `-EINVAL`, `-EFAULT`, `-EAGAIN` |
+| 1103 | `tls_close` | `fd` (a TLS session) | 0; sends `close_notify` (best effort), releases the session buffers and closes the descriptor. `-EINVAL` when the fd is not a session, `-EBADF` when it is closed |
 
 
 
@@ -106,6 +111,36 @@ On a socket descriptor, `read` is `recv` with `flags = 0`, `write` is `send`
 with `flags = 0`, and `close` closes the TCP connection and releases the
 descriptor. `lseek`/`ftruncate` answer `-EINVAL`, `fstat` reports
 `kind = OTHER` like the console.
+
+### TLS descriptors
+
+`tls_connect` turns a connected stream descriptor into a **TLS session**; the fd
+number does not change and everything above the record layer is plaintext:
+
+* `read`/`recv` decrypt, `write`/`send` encrypt (they are the same code as
+  1102/1101, so `send` on a TLS fd with a non-zero `dest` is `-ENOTSUP` — the
+  session already has a peer);
+* `poll` reports `POLLIN` when plaintext is buffered **or** the socket has bytes
+  (which may be a partial record, so a `read` after `POLLIN` can still wait for
+  the rest of it, bounded by the idle budget) and `POLLHUP` once the peer sent
+  `close_notify`;
+* `shutdown` sends `close_notify`: both directions close, the descriptor stays
+  open, a later `read` is `0` and a later `write` is `-EPIPE`;
+* `tls_close` (1103) is the graceful close. `close(2)` releases the session
+  *without* the alert, because it also runs at process teardown and may not wait
+  for a peer;
+* `dup`/`fork` do **not** duplicate a session: the copy is `-ENOTSUP` (a session
+  owns its buffers and key schedule, and two owners would tear it down under
+  each other). At most **4** sessions exist kernel-wide at once (`-ENOSPC`);
+  each costs ~50 KiB of kernel heap until it is closed;
+* a **concurrent** call on the same session from another thread of the process
+  is `-EAGAIN` rather than a second reader of one record stream;
+* there is no flag anywhere that relaxes verification, and no session is created
+  unless a certificate was verified during that handshake.
+
+A failed handshake abandons the connection (RFC 8446 §6.1): the socket is torn
+down and the descriptor is left as a tombstone — `-ENOTSUP` for I/O, `close`
+releases it — so a caller that wants to retry opens a new socket.
 
 ### Directory mutations
 
@@ -244,7 +279,15 @@ The kernel implements one **active-open IPv4 TCP client** and userland
 EEXIST=17 ENOTDIR=20 EISDIR=21 EINVAL=22 ENOSPC=28 EROFS=30 EPIPE=32
 ENOSYS=38 ENOTEMPTY=39 ENAMETOOLONG=36 ELOOP=40 EOVERFLOW=75 ENOTSOCK=88
 ENOPROTOOPT=92 ENOTSUP=95 EAFNOSUPPORT=97 ENETUNREACH=101 ECONNRESET=104
-EISCONN=106 ENOTCONN=107 ETIMEDOUT=110 ECONNREFUSED=111 EHOSTUNREACH=113`.
+EISCONN=106 ENOTCONN=107 ETIMEDOUT=110 ECONNREFUSED=111 EHOSTUNREACH=113
+EPROTO=71 EKEYREJECTED=129`.
+
+`EPROTO` is a TLS handshake or record that did not follow TLS 1.3;
+`EKEYREJECTED` is the trust decision refusing the server — the chain does not
+reach the committed CA bundle, the SAN does not authorize the requested name,
+the validity window fails the clock gate, or `CertificateVerify` did not check
+out. They are distinct on purpose: "the peer is not who it claims" is not "the
+protocol broke".
 
 ## 4. Runtime (`libpagh`)
 
@@ -261,8 +304,12 @@ EISCONN=106 ENOTCONN=107 ETIMEDOUT=110 ECONNREFUSED=111 EHOSTUNREACH=113`.
 * `net`: `Ipv4` (literal, `Ipv4::parse`) and `TcpStream::connect(host, port)`
   with `Read`/`Write` (non-blocking `read`: retry on `EAGAIN`), `read_to_end`
   and `shutdown`, plus `bind`/`listen`/`accept` for a TCP server and
-  `bind`/`sendto`/`recvfrom` for UDP. No DNS or TLS; see the socket subsection
-  above.
+  `bind`/`sendto`/`recvfrom` for UDP. No `getaddrinfo`; see the socket
+  subsection above. `dns::resolve` sends one `A` query over a UDP socket.
+* `tls`: `TlsStream::connect(TcpStream, host)` performs the handshake **in the
+  kernel** (syscall 1100) and then reads/writes plaintext through the descriptor;
+  there is no API here that weakens the verification, because there is no such
+  flag in the ABI. `random::fill` is `getrandom`.
 * Panics print `program: panic at <loc>` to fd 2 and `exit(101)`; no unwinding.
 * The ABI has threads, fork/exec/wait, signals, mmap/mprotect, poll, futexes and a bounded TCP server API. What it still lacks is a dynamic loader in the kernel (userland `ld-pagh` covers that) and file-backed mmap.
 
@@ -276,9 +323,15 @@ under `/mnt/bin/` and creates command symlinks. Packages are independent of apt.
 ## 6. Compatibility and versioning
 
 `libpagh` and the kernel ABI are versioned together: `base_version = 1`. A
-breaking change to an existing number, struct or flag is an ABI bump; this
-file-mutation family and this socket family are additive (seven plus seven new
-numbers, no changed field or flag on an existing call), so the base version
-stays 1. The kernel keeps answering
-`-ENOSYS` for numbers it does not know, so a program built against this table
-fails with a clear error on an older kernel instead of crashing.
+breaking change to an existing number, struct or flag is an ABI bump; the
+file-mutation, socket, thread, signal, process and (0.21.0) entropy/TLS families
+are additive — new numbers, no changed field or flag on an existing call — so
+the base version stays 1. The kernel keeps answering `-ENOSYS` for numbers it
+does not know, so a program built against this table fails with a clear error on
+an older kernel instead of crashing.
+
+The 0.21.0 additions are `getrandom` (278) and the four TLS calls (1100–1103).
+The one semantic addition to an *existing* shape is that `read`/`write`/`send`/
+`recv`/`poll`/`shutdown`/`close` now also accept a TLS descriptor; a descriptor
+that never had `tls_connect` on it behaves exactly as before, so the addition is
+backward compatible.

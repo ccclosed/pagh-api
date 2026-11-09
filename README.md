@@ -9,14 +9,17 @@
 ```
 docs/abi.md          замороженный контракт (источник истины)
 pagh-user.ld         раскладка ELF: база 0x10000, _start в .text.entry, R+X / R+W
-libpagh/src/sys.rs   29 ecall-обёрток + номера/флаги
-libpagh/src/errno.rs Errno (31 значение из ABI) и Result<T>
+libpagh/src/sys.rs   60 ecall-обёрток + номера/флаги
+libpagh/src/errno.rs Errno (33 значения из ABI) и Result<T>
 libpagh/src/abi.rs   Stat/Timespec/Uname/EntryKind, проверка размеров
 libpagh/src/rt.rs    _start, разбор argc/argv/envp, паника
 libpagh/src/alloc_impl.rs  bump-аллокатор на brk
 libpagh/src/io.rs    Read/Write/Seek, Stdin/Stdout/Stderr
 libpagh/src/fs.rs    File, Dir/DirEntry, stat, read_link
 libpagh/src/net.rs   Ipv4, TcpStream (один активный TCP-клиент), TcpListener (bind/listen/accept) и UdpSocket (bind/sendto/recvfrom)
+libpagh/src/tls.rs   TlsStream: TLS 1.3 на подключённом TcpStream (рукопожатие — ядро, fail-closed)
+libpagh/src/random.rs getrandom: пул энтропии ядра (fill/u64), короткие чтения скрыты
+libpagh/src/dns.rs   резолвер A-записей: один UDP-запрос (без DNSSEC/CNAME-цепочек)
 libpagh/src/path.rs  normalize/resolve относительно PWD
 libpagh/src/env.rs   args(), var(), current_dir()
 libpagh/src/print.rs print!/println!/eprintln!
@@ -25,6 +28,7 @@ examples/http_get.rs HTTP/1.0 GET на 10.0.2.2:8000 (нативный TCP-со�
 examples/udp_echo.rs UDP bind/sendto/recvfrom на 10.0.2.2:9000 (нативный UDP-сокет)
 examples/tcp_echo.rs TCP-сервер: bind 0.0.0.0, listen(4), accept одного host-подключения, echo
 examples/mutex.rs    четыре потока под futex Mutex (counter=1000)
+examples/https_get.rs HTTPS/1.1 GET: dns::resolve -> TcpStream -> TlsStream (1100) -> тело
 tools/check_abi.py   сверка чисел в docs/abi.md с sys.rs/errno.rs/abi.rs
 ```
 
@@ -44,6 +48,8 @@ rustup run nightly-2026-07-12 cargo build --release \
     --example udp_echo --target riscv64gc-unknown-none-elf   # ELF examples/udp_echo
 rustup run nightly-2026-07-12 cargo build --release \
     --example tcp_echo --target riscv64gc-unknown-none-elf   # ELF examples/tcp_echo
+rustup run nightly-2026-07-12 cargo build --release \
+    --example https_get --target riscv64gc-unknown-none-elf  # ELF examples/https_get
 python3 tools/check_abi.py                                   # дрейф ABI
 ```
 
@@ -60,6 +66,13 @@ python3 tools/check_abi.py                                   # дрейф ABI
 `examples/tcp_echo.rs` — TCP-сервер: `TcpListener::bind_with_backlog` на
 `0.0.0.0:45679` (backlog 4), один `accept`, чтение до EOF и echo; живой прогон —
 `tools/test_tcp_server.py` ядра (`mke2fs -d` + QEMU `hostfwd`).
+
+`examples/https_get.rs` — живой HTTPS/1.1-клиент: `dns::resolve` (A-запрос по
+UDP), `TcpStream::connect(ip, 443)`, `TlsStream::connect(socket, host)` —
+рукопожатие делает ядро — затем `GET` и разбор ответа (`Content-Length`,
+`chunked` или тело до закрытия); живой прогон — фаза userland в
+`tools/test_tls.py` ядра (образ `mke2fs -d`, `run /mnt/https_get example.com /`,
+транскрипт `docs/live-tls.txt`).
 
 `pagh-user.ld` повторяет `pagh-riscv/userland/user.ld`: образ начинается с
 `0x1_0000`, `_start` лежит первым в `.text.entry`, `.text`/`.rodata` дают
@@ -116,11 +129,14 @@ libpagh = { path = "../pagh-api/libpagh" }
 
 | Модуль | Что даёт |
 |---|---|
-| `sys` | `read write openat close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat getpid sched_yield exit` + `mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate` + `socket bind listen accept connect sendto recvfrom send recv shutdown`; все, кроме `exit`, возвращают `Result<T, Errno>`; незнакомый ядру номер даёт `ENOSYS` |
+| `sys` | `read write openat close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat getpid sched_yield exit` + `mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate` + `socket bind listen accept connect sendto recvfrom send recv shutdown` + `getrandom` + `tls_connect tls_write tls_read tls_close`; все, кроме `exit`, возвращают `Result<T, Errno>`; незнакомый ядру номер даёт `ENOSYS` |
 | `abi` | `Stat` (24 B), `Timespec` (16 B), `Uname` (80 B), `SockAddrIn` (16 B), `EntryKind`, `Dirent`-константы; размеры проверяются `const assert` |
-| `errno` | 31 errno из ABI + `Errno::Unknown` для дрейфа; `Display` с текстами для CLI |
+| `errno` | 33 errno из ABI + `Errno::Unknown` для дрейфа; `Display` с текстами для CLI (`EPROTO` — сломанное рукопожатие, `EKEYREJECTED` — отклонённый сертификат) |
 | `io` | `Read`/`Write`/`Seek`, `Stdin`/`Stdout`/`Stderr`, `copy`, `SeekFrom` |
-| `net` | `Ipv4` (литерал и `Ipv4::parse`), `TcpStream::connect(host, port)`, `Read`/`Write` (неблокирующий `read`: `EAGAIN` → повтор), `read_to_end`, `shutdown`; `TcpListener::bind`/`bind_to`/`bind_with_backlog`/`bind_nonblocking` и `accept` (peer `SockAddrIn`); `UdpSocket::bind`/`bind_to`, `send_to`, `recv_from`/`recv_from_nonblocking`; только IPv4-литералы, один listener + принятые соединения, UDP ≤ 1024 B, без DNS/TLS |
+| `net` | `Ipv4` (литерал и `Ipv4::parse`), `TcpStream::connect(host, port)`, `Read`/`Write` (неблокирующий `read`: `EAGAIN` → повтор), `read_to_end`, `shutdown`; `TcpListener::bind`/`bind_to`/`bind_with_backlog`/`bind_nonblocking` и `accept` (peer `SockAddrIn`); `UdpSocket::bind`/`bind_to`, `send_to`, `recv_from`/`recv_from_nonblocking`; только IPv4-литералы, один listener + принятые соединения, UDP ≤ 1024 B |
+| `tls` | `TlsStream::connect(TcpStream, host)` — рукопожатие TLS 1.3 **делает ядро** (цепочка до CA-бандла, SAN, срок, `CertificateVerify`; флага «не проверять» нет), `Read`/`Write` открытым текстом, `read_to_end`, `shutdown`, `close` (шлёт `close_notify`; `Drop` закрывает без него) |
+| `random` | `fill(&mut [u8])` (сам обходит 64 KiB-потолок вызова), `u64()`; без seed'а — `EAGAIN`, а не предсказуемые байты |
+| `dns` | `resolve(host, server)` — один A-запрос по UDP (`DEFAULT_SERVER = 10.0.2.3` в QEMU user network); без DNSSEC, без TCP-retry, CNAME-цепочка без A-записи — `EPROTO` |
 | `fs` | `File::open/create/open_with`, `File::set_len`, `read_to_end`, `read_to_string`, `write`/`write_all`, `create_dir`/`create_dir_all`, `remove_file`/`remove_dir`, `rename`, `hard_link`, `symlink`, `truncate` (по пути), `set_permissions`, `stat`, `read_link`, `Dir`/`DirEntry` поверх `getdents64` |
 | `path` | `normalize`, `resolve` (относительно `PWD`), `join`, `basename`, `dirname`, `Path` |
 | `env` | `args()` (включая `argv[0]`), `vars()`, `var("PWD")`, `current_dir()`, `program_name()` |
@@ -131,7 +147,9 @@ libpagh = { path = "../pagh-api/libpagh" }
 `EAGAIN` не ретраится внутри `Read`: это сигнал «на fd 0 пока нет байта»
 (и «на сокете пока нет данных»), и прикладной код делает `sched_yield` и
 повторяет (см. ниже). Исключение — `TcpStream::read_to_end`: он сам крутит
-этот цикл до EOF.
+этот цикл до EOF. `TlsStream::read` **блокирующий** (бюджет простоя в ядре,
+~20 s): `Ok(0)` — `close_notify`, а обрыв TCP без него — `ECONNRESET`, поэтому
+обрезанное тело нельзя принять за дочитанное.
 
 ## Память
 
@@ -164,7 +182,7 @@ EOF не выдаёт — `cat` без файлов будет ждать вво
 
 ## Чего нет
 
-Ни динамического линкера, ни `auxv`/TLS, ни libc, ни `std`. Процессы есть:
+Ни динамического линкера, ни `auxv`, ни libc, ни `std`. Процессы есть:
 `fork`/`execve`/`wait4`/`getppid` (0.16.0). Потоки и futex есть (0.13.0: [`thread::Builder`](libpagh/src/thread.rs)), [`sync::Mutex`/`RwLock`](libpagh/src/sync.rs) — 0.5.0,
 сигналы — `kill`/`tgkill`/`rt_sigaction`/`rt_sigprocmask`/`rt_sigreturn`
 (0.14.0), память — `mmap`/`munmap`/`mprotect`, дескрипторы — `pipe2`/`dup`/
@@ -181,8 +199,26 @@ IPv4-литералу, `send`/`recv`, `shutdown`), TCP-сервер (`bind` + `l
 `accept(202)`, один listener, очередь ≤ 4, принятые соединения — отдельные
 дескрипторы) и UDP (`AF_INET` + `SOCK_DGRAM`, `bind`, `sendto`,
 блокирующий/неблокирующий `recvfrom`). Нет UDP-`connect`, IPv6,
-DNS/`getaddrinfo`, `sendmsg`/`recvmsg` и TLS; второе **активное**
-TCP-соединение одновременно невозможно. `poll` на socket-fd работает
+`sendmsg`/`recvmsg`, `getaddrinfo`-подобного резолвера (есть `dns::resolve` —
+один A-запрос) и **TLS-сервера**; второе **активное**
+TCP-соединение одновременно невозможно.
+
+TLS есть как **клиент** и только на уже подключённом сокете (0.6.0):
+`TlsStream::connect(TcpStream, host)` — рукопожатие выполняет ядро тем же
+fail-closed проверяющим слоем, что и shell'овый `https` (цепочка до
+закоммиченного CA-бандла, SAN, срок, `CertificateVerify`); `flags`-флага
+«не проверять сертификат» не существует ни в ABI, ни здесь. Что остаётся
+программе: резолв (`dns`), TCP-`connect`, HTTP-framing (см.
+`examples/https_get.rs`) и решение, что слать. Одновременно живых TLS-сессий —
+**4** на ядро, `read` блокирующий (бюджет ~20 s), `tls_read` отдаёт до 4096 B
+за вызов, а обрыв TCP без `close_notify` — `ECONNRESET`, не EOF: обрезанный
+ответ нельзя принять за дочитанный. `dup`/`fork` сессию не копируют
+(`-ENOTSUP`), TLS-сервера, session resumption, ALPN, клиентских сертификатов,
+TLS 1.2 и ниже нет.
+
+`random::fill` — пул энтропии ядра (`/chosen/rng-seed` + SHA-256 ratchet); без
+seed'а ядро отвечает `EAGAIN`, а не предсказуемыми байтами, и это надо
+обрабатывать как фатальное для ключей. `poll` на socket-fd работает
 (готовность listener'а к `accept`, потока к чтению/записи). TCP `recv`
 неблокирующий (`EAGAIN` — повторить), `shutdown` закрывает оба направления;
 UDP `recvfrom` ждёт до дейтаграммы или ~10 s,

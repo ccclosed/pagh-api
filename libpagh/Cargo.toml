@@ -1,6 +1,6 @@
 [package]
 name = "libpagh"
-version = "0.1.0"
+version = "0.6.0"
 edition = "2021"
 publish = false
 description = "Native no_std userland API for the pagh-riscv kernel"
@@ -11,6 +11,10 @@ path = "src/lib.rs"
 [[example]]
 name = "hello"
 path = "../examples/hello.rs"
+
+[[example]]
+name = "https_get"
+path = "../examples/https_get.rs"
 
 [[example]]
 name = "fp"
