@@ -3,6 +3,13 @@
 Status: **frozen for the first ports**. The kernel (`src/user/syscall.rs`) and
 `libpagh` must match this document; a mismatch is a bug in whichever side drifted.
 
+This contract is the **pagh-riscv** kernel's
+([`ccclosed/pagh-riscv`](https://github.com/ccclosed/pagh-riscv), the RV64 kernel
+this repository's examples and live tests run on). It is *not* the ABI of
+`Pagh-OS`, the separate x86_64 Limine/UEFI kernel with a Linux x86_64
+compatibility layer: that layer implements Linux, not this document, and the two
+are deliberately unrelated.
+
 This is **not a Linux layer**. The numbers below happen to follow the generic
 RISC-V Linux syscall table because the kernel already used `write=64`/`exit=93`
 for its fixtures; the semantics, structs and the runtime are pagh's own. Programs
