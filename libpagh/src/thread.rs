@@ -141,7 +141,7 @@ impl Builder {
             | sys::CLONE_FILES
             | sys::CLONE_SIGHAND
             | sys::CLONE_THREAD;
-        match sys::clone(flags, stack_top, trampoline as usize, arg, 0, 0) {
+        match sys::clone(flags, stack_top, trampoline as *const () as usize, arg, 0, 0) {
             Ok(tid) => Ok(JoinHandle { state, tid }),
             Err(error) => {
                 // SAFETY: the clone failed, so no child owns `arg`.
