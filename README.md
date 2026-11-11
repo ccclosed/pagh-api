@@ -130,7 +130,7 @@ libpagh = { path = "../pagh-api/libpagh" }
 | Модуль | Что даёт |
 |---|---|
 | `sys` | `read write openat close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat getpid sched_yield exit` + `mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate` + `socket bind listen accept connect sendto recvfrom send recv shutdown` + `getrandom` + `tls_connect tls_write tls_read tls_close`; все, кроме `exit`, возвращают `Result<T, Errno>`; незнакомый ядру номер даёт `ENOSYS` |
-| `abi` | `Stat` (24 B), `Timespec` (16 B), `Uname` (80 B), `SockAddrIn` (16 B), `EntryKind`, `Dirent`-константы; размеры проверяются `const assert` |
+| `abi` | `Stat` (24 B), `Timespec` (16 B), `Uname` (80 B), `SockAddrIn` (16 B), `PollFd` (8 B), `SigAction` (32 B), `SigAltStack` (24 B), `SigInfo` (128 B), `MContext` (264 B), `UContext` (288 B), `EntryKind`, `Dirent`-константы; размеры проверяются `const assert` |
 | `errno` | 42 errno из ABI + `Errno::Unknown` для дрейфа; `Display` с текстами для CLI (`EPROTO` — сломанное рукопожатие, `EKEYREJECTED` — отклонённый сертификат) |
 | `io` | `Read`/`Write`/`Seek`, `Stdin`/`Stdout`/`Stderr`, `copy`, `SeekFrom` |
 | `net` | `Ipv4` (литерал и `Ipv4::parse`), `TcpStream::connect(host, port)`, `Read`/`Write` (неблокирующий `read`: `EAGAIN` → повтор), `read_to_end`, `shutdown`; `TcpListener::bind`/`bind_to`/`bind_with_backlog`/`bind_nonblocking` и `accept` (peer `SockAddrIn`); `UdpSocket::bind`/`bind_to`, `send_to`, `recv_from`/`recv_from_nonblocking`; только IPv4-литералы, один listener + принятые соединения, UDP ≤ 1024 B |
@@ -330,7 +330,7 @@ applet'ов успешно отработали на временной 2-segmen
 
 ```sh
 python3 tools/check_abi.py
-# ABI check OK: 60 syscalls, 42 errnos, 7 open flags, 4 struct sizes
+# ABI check OK: 60 syscalls, 42 errnos, 7 open flags, 10 struct sizes
 ```
 
 Скрипт читает `docs/abi.md`, парсит таблицу syscall'ов, секцию ошибок, флаги

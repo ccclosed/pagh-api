@@ -9,8 +9,9 @@ runs without a network or a cross toolchain:
   * every errno in doc §3 has an `Errno` variant with the same discriminant,
     and no variant (other than `Unknown`, the drift marker) is undocumented;
   * every `O_*`/`AT_*` flag in doc §2 matches `libpagh/src/sys.rs`;
-  * the documented `Stat`/`Timespec`/`Uname`/`SockAddrIn` sizes match the compile-time
-    assertions in `libpagh/src/abi.rs`.
+  * the documented structure sizes (`Stat`, `Timespec`, `Uname`, `SockAddrIn`,
+    `PollFd`, `SigAction`, `SigAltStack`, `SigInfo`, `MContext`, `UContext`)
+    match the compile-time assertions in `libpagh/src/abi.rs`.
 
 Exit code 0 on agreement, 1 on any drift, 2 when a file/pattern is missing
 (which means the contract or the parser moved and a human must look).
@@ -122,9 +123,25 @@ def rust_flags(source: str) -> dict[str, int]:
     }
 
 
+# Every structure docs/abi.md §2 documents. Adding one to the contract without
+# adding it here would make the drift alarm narrower than the contract.
+ABI_STRUCTS = (
+    "Stat",
+    "Timespec",
+    "Uname",
+    "SockAddrIn",
+    "PollFd",
+    "SigAction",
+    "SigAltStack",
+    "SigInfo",
+    "MContext",
+    "UContext",
+)
+
+
 def rust_struct_sizes(source: str) -> dict[str, int]:
     # Only the ABI structs; primitive-width asserts are not ABI struct sizes.
-    wanted = {"Stat", "Timespec", "Uname", "SockAddrIn"}
+    wanted = set(ABI_STRUCTS)
     return {
         name: int(size)
         for name, size in re.findall(
@@ -136,7 +153,7 @@ def rust_struct_sizes(source: str) -> dict[str, int]:
 
 def documented_struct_sizes(doc: str) -> dict[str, int]:
     sizes: dict[str, int] = {}
-    for name in ("Stat", "Timespec", "Uname", "SockAddrIn"):
+    for name in ABI_STRUCTS:
         match = re.search(
             rf"struct\s+{name}\b.*?//\s*(\d+)\s+bytes", doc, re.S
         )

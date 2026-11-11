@@ -349,4 +349,5 @@ pub const SA_RESETHAND: usize = 0x8000_0000;
 
 const _: () = assert!(core::mem::size_of::<SigAltStack>() == 24);
 const _: () = assert!(core::mem::size_of::<SigInfo>() == 128);
+const _: () = assert!(core::mem::size_of::<MContext>() == 264);
 const _: () = assert!(core::mem::size_of::<UContext>() == 288);
