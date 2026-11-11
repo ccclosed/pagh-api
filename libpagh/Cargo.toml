@@ -1,6 +1,6 @@
 [package]
 name = "libpagh"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 publish = false
 description = "Native no_std userland API for the pagh-riscv kernel"

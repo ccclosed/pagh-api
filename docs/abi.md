@@ -275,12 +275,22 @@ The kernel implements one **active-open IPv4 TCP client** and userland
 
 ## 3. Errors
 
-`EPERM=1 ENOENT=2 EIO=5 EBADF=9 EAGAIN=11 ENOMEM=12 EACCES=13 EFAULT=14
-EEXIST=17 ENOTDIR=20 EISDIR=21 EINVAL=22 ENOSPC=28 EROFS=30 EPIPE=32
-ENOSYS=38 ENOTEMPTY=39 ENAMETOOLONG=36 ELOOP=40 EOVERFLOW=75 ENOTSOCK=88
-ENOPROTOOPT=92 ENOTSUP=95 EAFNOSUPPORT=97 ENETUNREACH=101 ECONNRESET=104
-EISCONN=106 ENOTCONN=107 ETIMEDOUT=110 ECONNREFUSED=111 EHOSTUNREACH=113
-EPROTO=71 EKEYREJECTED=129`.
+`EPERM=1 ENOENT=2 ESRCH=3 EINTR=4 EIO=5 E2BIG=7 ENOEXEC=8 EBADF=9
+ECHILD=10
+EAGAIN=11 ENOMEM=12 EACCES=13 EFAULT=14 EEXIST=17 ENOTDIR=20 EISDIR=21
+EINVAL=22 ENOSPC=28 EROFS=30 EPIPE=32 ENAMETOOLONG=36 ENOSYS=38
+ENOTEMPTY=39 ELOOP=40 EPROTO=71 EOVERFLOW=75 ENOTSOCK=88 EDESTADDRREQ=89
+EMSGSIZE=90 ENOPROTOOPT=92 ENOTSUP=95 EAFNOSUPPORT=97 EADDRINUSE=98
+EADDRNOTAVAIL=99 ENETUNREACH=101 ECONNRESET=104 EISCONN=106 ENOTCONN=107
+ETIMEDOUT=110 ECONNREFUSED=111 EHOSTUNREACH=113 EKEYREJECTED=129`.
+
+`ESRCH`, `EINTR`, `E2BIG`, `ENOEXEC`, `ECHILD`, `EDESTADDRREQ`, `EMSGSIZE`,
+`EADDRINUSE` and `EADDRNOTAVAIL` were already named by the syscall rows in §2
+(`kill`/`tgkill`, the blocking calls interrupted by a handler, `execve`
+— `E2BIG` is its over-long argv/envp refusal —, `wait4`, `bind` and `sendto`),
+and the kernel has always returned them; §3
+simply omitted their numbers. Recording them here is a documentation fix, not a
+new ABI shape: no existing number or semantic changed.
 
 `EPROTO` is a TLS handshake or record that did not follow TLS 1.3;
 `EKEYREJECTED` is the trust decision refusing the server — the chain does not
@@ -335,3 +345,9 @@ The one semantic addition to an *existing* shape is that `read`/`write`/`send`/
 `recv`/`poll`/`shutdown`/`close` now also accept a TLS descriptor; a descriptor
 that never had `tls_connect` on it behaves exactly as before, so the addition is
 backward compatible.
+
+The §3 error list is additive in the same way. The numbers added in the 0.6.1
+documentation fix (`ESRCH`, `EINTR`, `E2BIG`, `ENOEXEC`, `ECHILD`,
+`EDESTADDRREQ`, `EMSGSIZE`, `EADDRINUSE`, `EADDRNOTAVAIL`) were always
+returned by the kernel;
+listing them changes no syscall's behaviour and `base_version` stays 1.

@@ -10,7 +10,7 @@
 docs/abi.md          замороженный контракт (источник истины)
 pagh-user.ld         раскладка ELF: база 0x10000, _start в .text.entry, R+X / R+W
 libpagh/src/sys.rs   60 ecall-обёрток + номера/флаги
-libpagh/src/errno.rs Errno (33 значения из ABI) и Result<T>
+libpagh/src/errno.rs Errno (42 значения из ABI) и Result<T>
 libpagh/src/abi.rs   Stat/Timespec/Uname/EntryKind, проверка размеров
 libpagh/src/rt.rs    _start, разбор argc/argv/envp, паника
 libpagh/src/alloc_impl.rs  bump-аллокатор на brk
@@ -131,7 +131,7 @@ libpagh = { path = "../pagh-api/libpagh" }
 |---|---|
 | `sys` | `read write openat close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat getpid sched_yield exit` + `mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate` + `socket bind listen accept connect sendto recvfrom send recv shutdown` + `getrandom` + `tls_connect tls_write tls_read tls_close`; все, кроме `exit`, возвращают `Result<T, Errno>`; незнакомый ядру номер даёт `ENOSYS` |
 | `abi` | `Stat` (24 B), `Timespec` (16 B), `Uname` (80 B), `SockAddrIn` (16 B), `EntryKind`, `Dirent`-константы; размеры проверяются `const assert` |
-| `errno` | 33 errno из ABI + `Errno::Unknown` для дрейфа; `Display` с текстами для CLI (`EPROTO` — сломанное рукопожатие, `EKEYREJECTED` — отклонённый сертификат) |
+| `errno` | 42 errno из ABI + `Errno::Unknown` для дрейфа; `Display` с текстами для CLI (`EPROTO` — сломанное рукопожатие, `EKEYREJECTED` — отклонённый сертификат) |
 | `io` | `Read`/`Write`/`Seek`, `Stdin`/`Stdout`/`Stderr`, `copy`, `SeekFrom` |
 | `net` | `Ipv4` (литерал и `Ipv4::parse`), `TcpStream::connect(host, port)`, `Read`/`Write` (неблокирующий `read`: `EAGAIN` → повтор), `read_to_end`, `shutdown`; `TcpListener::bind`/`bind_to`/`bind_with_backlog`/`bind_nonblocking` и `accept` (peer `SockAddrIn`); `UdpSocket::bind`/`bind_to`, `send_to`, `recv_from`/`recv_from_nonblocking`; только IPv4-литералы, один listener + принятые соединения, UDP ≤ 1024 B |
 | `tls` | `TlsStream::connect(TcpStream, host)` — рукопожатие TLS 1.3 **делает ядро** (цепочка до CA-бандла, SAN, срок, `CertificateVerify`; флага «не проверять» нет), `Read`/`Write` открытым текстом, `read_to_end`, `shutdown`, `close` (шлёт `close_notify`; `Drop` закрывает без него) |
@@ -203,7 +203,7 @@ IPv4-литералу, `send`/`recv`, `shutdown`), TCP-сервер (`bind` + `l
 один A-запрос) и **TLS-сервера**; второе **активное**
 TCP-соединение одновременно невозможно.
 
-TLS есть как **клиент** и только на уже подключённом сокете (0.6.0):
+TLS есть как **клиент** и только на уже подключённом сокете (0.6.1):
 `TlsStream::connect(TcpStream, host)` — рукопожатие выполняет ядро тем же
 fail-closed проверяющим слоем, что и shell'овый `https` (цепочка до
 закоммиченного CA-бандла, SAN, срок, `CertificateVerify`); `flags`-флага
@@ -330,7 +330,7 @@ applet'ов успешно отработали на временной 2-segmen
 
 ```sh
 python3 tools/check_abi.py
-# ABI check OK: 29 syscalls, 31 errnos, 7 open flags, 4 struct sizes
+# ABI check OK: 60 syscalls, 42 errnos, 7 open flags, 4 struct sizes
 ```
 
 Скрипт читает `docs/abi.md`, парсит таблицу syscall'ов, секцию ошибок, флаги
