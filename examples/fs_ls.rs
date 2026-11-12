@@ -120,7 +120,10 @@ pub extern "C" fn main(_argc: i32, _argv: *const *const u8, _envp: *const *const
                 return 4;
             }
             if entry.path() != probe {
-                println!("fs_ls: DirEntry::path is {}, expected {probe}", entry.path());
+                println!(
+                    "fs_ls: DirEntry::path is {}, expected {probe}",
+                    entry.path()
+                );
                 return 4;
             }
             match fs::read_to_string(entry.path()) {
