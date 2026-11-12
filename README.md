@@ -32,6 +32,7 @@ examples/mutex.rs    четыре потока под futex Mutex (counter=1000)
 examples/https_get.rs HTTPS/1.1 GET: dns::resolve -> TcpStream -> TlsStream (1100) -> тело
 examples/fs_ls.rs    read_dir + read_to_string + write на /mnt, самопроверка (exit 0)
 examples/spawn.rs    Command-lite: self-exec, env/env_clear, exit codes, try_wait/wait
+docs/live-spawn.txt  живой QEMU-транскрипт examples/spawn (харнесс tools/live-spawn.py)
 tools/check_abi.py   сверка чисел в docs/abi.md с sys.rs/errno.rs/abi.rs (+ §4 fs/process)
 ```
 
