@@ -20,6 +20,7 @@ libpagh/src/net.rs   Ipv4, TcpStream (один активный TCP-клиент
 libpagh/src/tls.rs   TlsStream: TLS 1.3 на подключённом TcpStream (рукопожатие — ядро, fail-closed)
 libpagh/src/random.rs getrandom: пул энтропии ядра (fill/u64), короткие чтения скрыты
 libpagh/src/dns.rs   резолвер A-записей: один UDP-запрос (без DNSSEC/CNAME-цепочек)
+libpagh/src/process.rs Command-lite: fork/execve/wait4, ExitStatus (без пайпов и kill)
 libpagh/src/path.rs  normalize/resolve относительно PWD
 libpagh/src/env.rs   args(), var(), current_dir()
 libpagh/src/print.rs print!/println!/eprintln!
@@ -30,7 +31,8 @@ examples/tcp_echo.rs TCP-сервер: bind 0.0.0.0, listen(4), accept одно�
 examples/mutex.rs    четыре потока под futex Mutex (counter=1000)
 examples/https_get.rs HTTPS/1.1 GET: dns::resolve -> TcpStream -> TlsStream (1100) -> тело
 examples/fs_ls.rs    read_dir + read_to_string + write на /mnt, самопроверка (exit 0)
-tools/check_abi.py   сверка чисел в docs/abi.md с sys.rs/errno.rs/abi.rs (+ §4 fs -> fs.rs)
+examples/spawn.rs    Command-lite: self-exec, env/env_clear, exit codes, try_wait/wait
+tools/check_abi.py   сверка чисел в docs/abi.md с sys.rs/errno.rs/abi.rs (+ §4 fs/process)
 ```
 
 ## Сборка
@@ -53,6 +55,8 @@ rustup run nightly-2026-07-12 cargo build --release \
     --example https_get --target riscv64gc-unknown-none-elf  # ELF examples/https_get
 rustup run nightly-2026-07-12 cargo build --release \
     --example fs_ls --target riscv64gc-unknown-none-elf      # ELF examples/fs_ls
+rustup run nightly-2026-07-12 cargo build --release \
+    --example spawn --target riscv64gc-unknown-none-elf      # ELF examples/spawn
 python3 tools/check_abi.py                                   # дрейф ABI
 ```
 
@@ -142,6 +146,7 @@ libpagh = { path = "../pagh-api/libpagh" }
 | `dns` | `resolve(host, server)` — один A-запрос по UDP (`DEFAULT_SERVER = 10.0.2.3` в QEMU user network); без DNSSEC, без TCP-retry, CNAME-цепочка без A-записи — `EPROTO` |
 | `fs` | `File::open/create/open_with`, `File::set_len`, `read_to_end`, `read_to_string`, `write`/`write_all`, `create_dir`/`create_dir_all`, `remove_file`/`remove_dir`, `rename`, `hard_link`, `symlink`, `truncate` (по пути), `set_permissions`, `stat`, `read_link`, `Dir::open`; `read_dir` — std-образный итератор `DirEntry` поверх `getdents64` с `file_name`/`path`/`file_type`/`metadata` |
 | `path` | `normalize`, `resolve` (относительно `PWD`), `join`, `basename`, `dirname`, `Path` |
+| `process` | `Command::new`, `arg`/`args`, `env`/`env_clear`, `spawn`, `status`; `Child::id`/`wait`/`try_wait`; `ExitStatus::code`/`signal`/`success` — lite `std::process::Command` поверх `fork`+`execve`+`wait4`. Без пайпов/PATH-поиска и без cross-process `kill` (kill в ABI адресует только текущий run); ошибка `execve` в ребёнке → сообщение на fd 2 и exit 127 |
 | `env` | `args()` (включая `argv[0]`), `vars()`, `var("PWD")`, `current_dir()`, `program_name()` |
 | `alloc` | bump-аллокатор на `brk`: работают `Vec`, `String`, `format!` |
 | `print` | `print! println! eprint! eprintln!` |
@@ -321,12 +326,12 @@ CI (`.github/workflows/ci.yml`) на каждый push и PR ставит зак
 
 ```sh
 python3 tools/check_abi.py
-# ABI check OK: 60 syscalls, 42 errnos, 7 open flags, 10 struct sizes, 25 fs items
+# ABI check OK: 60 syscalls, 42 errnos, 7 open flags, 10 struct sizes, 25 fs items, 13 process items
 ```
 
 Скрипт читает `docs/abi.md`, парсит таблицу syscall'ов, секцию ошибок, флаги
 `O_*` и комментарии размеров структур, затем грепает `sys.rs`, `errno.rs`,
 `abi.rs`. Проверяет и обратное направление: лишний `SYS_*`/`O_*`/errno без
-строки в контракте — тоже ошибка. Отдельно сверяется указатель §4 `fs` →
-`fs.rs`: имя, которое контракт обещает, но которого нет в коде, краснит
+строки в контракте — тоже ошибка. Отдельно сверяются указатели §4 `fs` → `fs.rs` и §4 `process` →
+`process.rs`: имя, которое контракт обещает, но которого нет в коде, краснит
 проверку.

@@ -1,6 +1,6 @@
 [package]
 name = "libpagh"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 publish = false
 description = "Native no_std userland API for the pagh-riscv kernel"
@@ -43,3 +43,7 @@ path = "../examples/mutex.rs"
 [[example]]
 name = "fs_ls"
 path = "../examples/fs_ls.rs"
+
+[[example]]
+name = "spawn"
+path = "../examples/spawn.rs"
