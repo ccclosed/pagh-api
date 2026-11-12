@@ -1,0 +1,126 @@
+# Live Command-lite acceptance for libpagh (process::Command over fork/execve/wait4)
+# kernel: /home/oleg/pagh-riscv/target/riscv64gc-unknown-none-elf/release/pagh
+# kernel checkout: /home/oleg/pagh-riscv (revision a0933ee (clean), crate 0.21.2)
+# kernel sha256: 9a0440dcf39c8278c351d9b71e88d2b9fbbf9b9058fa9b187987bcf0ef0a0479
+# pagh-api revision: 8e6c07f (clean)
+# host: QEMU emulator version 10.2.2 (qemu-10.2.2-1.fc44), rustc 1.99.0-nightly (be8e82435 2026-07-11)
+# image: mke2fs -t ext2 -b 1024 -d <root with target/.../examples/canonicalize as canonicalize> disk.img
+# guest command: run /mnt/canonicalize
+
+OpenSBI v1.7
+   ____                    _____ ____ _____
+  / __ \                  / ____|  _ \_   _|
+ | |  | |_ __   ___ _ __ | (___ | |_) || |
+ | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+ | |__| | |_) |  __/ | | |____) | |_) || |_
+  \____/| .__/ \___|_| |_|_____/|____/_____|
+        | |
+        |_|
+
+Platform Name               : riscv-virtio,qemu
+Platform Features           : medeleg
+Platform HART Count         : 1
+Platform IPI Device         : aclint-mswi
+Platform Timer Device       : aclint-mtimer @ 10000000Hz
+Platform Console Device     : uart8250
+Platform HSM Device         : ---
+Platform PMU Device         : ---
+Platform Reboot Device      : syscon-reboot
+Platform Shutdown Device    : syscon-poweroff
+Platform Suspend Device     : ---
+Platform CPPC Device        : ---
+Firmware Base               : 0x80000000
+Firmware Size               : 317 KB
+Firmware RW Offset          : 0x40000
+Firmware RW Size            : 61 KB
+Firmware Heap Offset        : 0x46000
+Firmware Heap Size          : 37 KB (total), 2 KB (reserved), 11 KB (used), 23 KB (free)
+Firmware Scratch Size       : 4096 B (total), 1400 B (used), 2696 B (free)
+Runtime SBI Version         : 3.0
+Standard SBI Extensions     : time,rfnc,ipi,base,hsm,srst,pmu,dbcn,fwft,legacy,dbtr,sse
+Experimental SBI Extensions : none
+
+Domain0 Name                : root
+Domain0 Boot HART           : 0
+Domain0 HARTs               : 0*
+Domain0 Region00            : 0x0000000000100000-0x0000000000100fff M: (I,R,W) S/U: (R,W)
+Domain0 Region01            : 0x0000000010000000-0x0000000010000fff M: (I,R,W) S/U: (R,W)
+Domain0 Region02            : 0x0000000002000000-0x000000000200ffff M: (I,R,W) S/U: ()
+Domain0 Region03            : 0x0000000080040000-0x000000008004ffff M: (R,W) S/U: ()
+Domain0 Region04            : 0x0000000080000000-0x000000008003ffff M: (R,X) S/U: ()
+Domain0 Region05            : 0x000000000c400000-0x000000000c5fffff M: (I,R,W) S/U: (R,W)
+Domain0 Region06            : 0x000000000c000000-0x000000000c3fffff M: (I,R,W) S/U: (R,W)
+Domain0 Region07            : 0x0000000000000000-0xffffffffffffffff M: () S/U: (R,W,X)
+Domain0 Next Address        : 0x0000000080200000
+Domain0 Next Arg1           : 0x000000008fe00000
+Domain0 Next Mode           : S-mode
+Domain0 SysReset            : yes
+Domain0 SysSuspend          : yes
+
+Boot HART ID                : 0
+Boot HART Domain            : root
+Boot HART Priv Version      : v1.12
+Boot HART Base ISA          : rv64imafdch
+Boot HART ISA Extensions    : sstc,zicntr,zihpm,zicboz,zicbom,sdtrig,svadu
+Boot HART PMP Count         : 16
+Boot HART PMP Granularity   : 2 bits
+Boot HART PMP Address Bits  : 54
+Boot HART MHPM Info         : 16 (0x0007fff8)
+Boot HART Debug Triggers    : 2 triggers
+Boot HART MIDELEG           : 0x0000000000001666
+Boot HART MEDELEG           : 0x0000000000f4b509
+framebuffer  ramfb 1280x800 stride 5120 cells 100x37
+
+========================================
+   pagh OS �� RISC-V (RV64)
+========================================
+boot hart   0
+device tree 0x8fe00000
+memory      0x80000000..0x90000000 (256 MiB)
+timebase    10000000 Hz
+console     NS16550 @ 0x10000000
+pmm         62641/65536 frames free (256 MiB tracked), heap 0 KiB in 0 chunk(s)
+sv39        on, satp=0x8000000000080b4d, identity 0x80000000..0x90000000 (RWX below 0x80b4d000, RW above), 65549 pages, 13 device
+rtc         goldfish @ 0x101000 - 2026-11-12 22:06:31 UTC
+rtc         raw 0xf824d820 0x18e76b83 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+entropy     32 bytes from /chosen/rng-seed - TLS session keys available
+timer       10 ms ticks (100 Hz, timebase 10000000 Hz)
+plic        0xc000000 context 1, uart irq 10 (rx interrupt on)
+task        16 slots, 16 KiB stack + 4 KiB guard, quantum 8 ticks, timer clock
+virtio-blk: virtio-blk0 at 0x10007000: 32768 sectors (16 MiB)
+virtio-input: tablet at 0x10008000, abs X 0..32767, Y 0..32767
+fs          virtio-blk0 (32768 sectors, 16384 KiB)
+fs          ext2 on /mnt, 1024 B blocks, 15037/16384 blocks free, 4084/4096 inodes free
+virtio-net: no device
+net         no network device
+
+Type 'help' for the command list.
+
+pagh:rv64> run /mnt/canonicalize
+canonicalize: io::stdout() handle writes
+canonicalize: tree ready under /mnt/canon-test
+canonicalize: root -> /
+canonicalize: dot-dot-lexical -> /mnt/canon-test/sub/file.txt
+canonicalize: dots-and-slashes -> /mnt/canon-test/sub/file.txt
+canonicalize: relative-link -> /mnt/canon-test/sub/file.txt
+canonicalize: absolute-link -> /mnt/canon-test/sub/file.txt
+canonicalize: symlink-then-dot-dot -> /mnt/canon-test/sub/file.txt
+canonicalize: link-dot-dot-link -> /mnt/canon-test/sub/file.txt
+canonicalize: directory -> /mnt/canon-test
+canonicalize: missing-component -> No such file or directory (expected)
+canonicalize: broken-link -> No such file or directory (expected)
+canonicalize: symlink-loop -> Too many levels of symbolic links (expected)
+canonicalize: file-as-directory -> Not a directory (expected)
+canonicalize: Path::file_name ok
+canonicalize: Path::extension ok
+canonicalize: Path::parent ok
+canonicalize: Path::starts_with ok
+canonicalize: Path::root-file-name ok
+canonicalize: Path::hidden-extension ok
+canonicalize: Path::trailing-dot ok
+canonicalize: Path::root-parent ok
+canonicalize: Path::relative-parent ok
+canonicalize: Path::canonicalize-method ok
+canonicalize: ok (realpath values, errors, Path helpers, io::stdout)
+run: /mnt/canonicalize exited with code 0
+pagh:rv64> 
