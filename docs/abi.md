@@ -366,6 +366,7 @@ protocol broke".
   `remove_file`, `remove_dir`, `rename`, `hard_link`, `symlink`, `truncate`,
   `set_permissions`, `Dir::open`, `read_dir` (std-shaped iterator over
   `DirEntry`: `file_name`, `path`, `file_type`, `metadata`), `fs::read_link`,
+  `fs::canonicalize` (component-wise realpath over readlinkat and stat),
   `fs::stat`.
 * `process`: `Command::new`, `arg`/`args`, `env`/`env_clear`, `spawn`,
   `status`, `Child::id`/`Child::wait`/`Child::try_wait`,
@@ -375,7 +376,12 @@ protocol broke".
   resolves only inside the calling run); `execve` errors exit the child with
   127 after a message on fd 2 (the shell convention).
 * `env`: `args()` (with `argv[0]`), `env("PWD")`, `path::resolve` for relative paths.
-* `io`: `Read`, `Write`, `Seek` traits and `Stdin`, `Stdout`.
+* `path`: lexical `normalize`, `resolve`, `join`; std-shaped component helpers
+  `file_name`, `extension`, `parent`, `starts_with`; `basename`, `dirname` and
+  the owned `Path` wrapper (whose canonicalize method follows links via
+  fs::canonicalize).
+* `io`: `Read`, `Write`, `Seek` traits, `Stdin`/`Stdout`/`Stderr`, and the
+  `stdin`/`stdout`/`stderr` handle constructors.
 * `net`: `Ipv4` (literal, `Ipv4::parse`) and `TcpStream::connect(host, port)`
   with `Read`/`Write` (non-blocking `read`: retry on `EAGAIN`), `read_to_end`
   and `shutdown`, plus `bind`/`listen`/`accept` for a TCP server and

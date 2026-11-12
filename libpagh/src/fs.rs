@@ -181,6 +181,11 @@ pub fn create_dir(path: &str) -> Result<()> {
 /// if it is a directory ([`stat`] decides), so a regular file in the way is
 /// reported as `EEXIST` instead of being silently skipped. `/` alone is a
 /// no-op.
+///
+/// The synthetic root's mount point (`/mnt`) is not a node that can be
+/// mkdir'ed: `mkdirat("/mnt")` answers `ENOTSUP` rather than `EEXIST`, so that
+/// answer is accepted too when [`stat`] shows the component already is a
+/// directory (the useful case `create_dir_all("/mnt/x/y")`).
 pub fn create_dir_all(path: &str) -> Result<()> {
     let absolute = path::resolve(path);
     if absolute == "/" {
@@ -192,7 +197,7 @@ pub fn create_dir_all(path: &str) -> Result<()> {
         prefix.push_str(component);
         match create_dir(&prefix) {
             Ok(()) => {}
-            Err(Errno::EEXIST) => {
+            Err(Errno::EEXIST) | Err(Errno::ENOTSUP) => {
                 if !stat(&prefix)?.is_dir() {
                     return Err(Errno::EEXIST);
                 }
@@ -312,6 +317,87 @@ pub fn read_link(path: &str) -> Result<String> {
             return Err(Errno::ENAMETOOLONG);
         }
         capacity *= 2;
+    }
+}
+
+/// Resolve `path` to an absolute canonical path (POSIX `realpath`): every
+/// symbolic link is followed, `.` and `..` are applied to the *resolved*
+/// prefix, and the result contains no symlink or dot components.
+///
+/// The ABI has no `realpath` syscall; this walks the path component by
+/// component with `readlinkat` (`EINVAL` means "not a symlink") and `stat`, so
+/// it costs one or two syscalls per component. A relative `path` is resolved
+/// against `PWD` first (lexically, like every other path-taking function in
+/// this crate), so a cwd that is itself reached through a symlink is named by
+/// its `PWD` spelling. More than **40** symbolic links is `ELOOP`; a missing
+/// component is `ENOENT`; a regular file used as a prefix is `ENOTDIR`.
+pub fn canonicalize(path: &str) -> Result<String> {
+    let absolute = if path.starts_with('/') {
+        String::from(path)
+    } else {
+        path::resolve(path)
+    };
+    let mut pending: Vec<String> = absolute
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .map(String::from)
+        .collect();
+    let mut resolved: Vec<String> = Vec::new();
+    let mut links = 0usize;
+
+    while !pending.is_empty() {
+        let component = pending.remove(0);
+        match component.as_str() {
+            "." => continue,
+            ".." => {
+                resolved.pop();
+                continue;
+            }
+            _ => {}
+        }
+
+        let mut candidate = String::from("/");
+        if !resolved.is_empty() {
+            candidate.push_str(&resolved.join("/"));
+            candidate.push('/');
+        }
+        candidate.push_str(&component);
+
+        match read_link(&candidate) {
+            Ok(target) => {
+                links += 1;
+                if links > 40 {
+                    return Err(Errno::ELOOP);
+                }
+                if target.starts_with('/') {
+                    resolved.clear();
+                }
+                let mut next: Vec<String> = target
+                    .split('/')
+                    .filter(|part| !part.is_empty())
+                    .map(String::from)
+                    .collect();
+                next.append(&mut pending);
+                pending = next;
+                continue;
+            }
+            Err(Errno::EINVAL) => {
+                // Not a symbolic link: it must exist, and be a directory when
+                // other components follow.
+                let stat = stat(&candidate)?;
+                if !pending.is_empty() && !stat.is_dir() {
+                    return Err(Errno::ENOTDIR);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+        resolved.push(component);
+    }
+
+    if resolved.is_empty() {
+        Ok(String::from("/"))
+    } else {
+        Ok(alloc::format!("/{}", resolved.join("/")))
     }
 }
 
