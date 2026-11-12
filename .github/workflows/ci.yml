@@ -11,5 +11,7 @@ jobs:
           rustup toolchain install "$channel" --profile minimal --target riscv64gc-unknown-none-elf
       - name: Build libpagh and the hello example
         run: ./build.sh
+      - name: Build every example
+        run: cargo build --release --examples --target riscv64gc-unknown-none-elf
       - name: ABI drift check (docs/abi.md vs syscall wrappers)
         run: python3 tools/check_abi.py
