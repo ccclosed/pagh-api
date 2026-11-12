@@ -3,6 +3,13 @@
 Status: **frozen for the first ports**. The kernel (`src/user/syscall.rs`) and
 `libpagh` must match this document; a mismatch is a bug in whichever side drifted.
 
+This contract is the **pagh-riscv** kernel's
+([`ccclosed/pagh-riscv`](https://github.com/ccclosed/pagh-riscv), the RV64 kernel
+this repository's examples and live tests run on). It is *not* the ABI of
+`Pagh-OS`, the separate x86_64 Limine/UEFI kernel with a Linux x86_64
+compatibility layer: that layer implements Linux, not this document, and the two
+are deliberately unrelated.
+
 This is **not a Linux layer**. The numbers below happen to follow the generic
 RISC-V Linux syscall table because the kernel already used `write=64`/`exit=93`
 for its fixtures; the semantics, structs and the runtime are pagh's own. Programs
@@ -81,7 +88,7 @@ current user address space; a bad pointer returns `-EFAULT` and never faults.
 | 59 | `pipe2` | `*fds[2]`, `flags` (must be 0) | 0; read end non-blocking (`-EAGAIN` when empty), EOF once all write ends close |
 | 23 | `dup` | `fd` | new fd |
 | 24 | `dup2` | `oldfd`, `newfd` | `newfd` (asm-generic number 24 also answers `dup3`) |
-| 7 | `poll` | `*PollFd`, `nfds`, `timeout_ms` | ready count; `POLLIN`/`POLLOUT`/`POLLERR`/`POLLHUP`/`POLLNVAL` |
+| 7 | `poll` | `*PollFd` (at most 64 entries), `nfds`, `timeout_ms` (0 = scan, negative = wait) | ready count (`0` = timeout); `POLLIN`/`POLLOUT`/`POLLERR`/`POLLHUP`/`POLLNVAL`; `nfds > 64` is `-EINVAL`, a negative `fd` is skipped |
 | 72 | `ppoll` | `*PollFd`, `nfds`, `*timespec` (treated as ms), mask (ignored) | as `poll` |
 | 220 | `clone` | `flags` (`CLONE_VM=0x100\|CLONE_THREAD=0x10000` required, `CLONE_FS/FILES/SIGHAND` accepted, `SETTLS` → `-ENOTSUP`), `stack` (16-aligned, mapped R/W), `entry` (mapped X), `arg`, `gp`, `tp` | child tid; child returns 0 and runs `entry(arg)`; `-EINVAL`, `-EAGAIN` |
 | 98 | `futex` | `uaddr` (4-aligned), `op` (`WAIT=0`/`WAKE=1` plus `PRIVATE=128`), `val`, `timeout` (0 or `*Timespec`) | `WAIT`: 0, `-EAGAIN` (value changed), `-ETIMEDOUT`; `WAKE`: number woken; other ops `-ENOSYS` |
@@ -184,10 +191,59 @@ struct SockAddrIn {      // 16 bytes, native BSD layout
     uint8_t  address[4]; // IPv4 octets, wire order
     uint8_t  zero[8];    // padding, ignored by the kernel
 };
+struct PollFd {          // 8 bytes, the poll(2) descriptor
+    int32_t  fd;         // negative: skipped, revents stays 0
+    int16_t  events;     // requested: POLLIN=0x1, POLLOUT=0x4
+    int16_t  revents;    // returned: POLLIN/POLLOUT/POLLERR/POLLHUP/POLLNVAL
+};
+struct SigAction {       // 32 bytes, pagh native layout (not Linux's sigaction)
+    uint64_t handler;    // SIG_DFL=0, SIG_IGN=1, or a user function address
+    uint64_t flags;      // SA_* below; a real handler requires SA_RESTORER
+    uint64_t mask;       // signals blocked while the handler runs
+    uint64_t restorer;   // user code the handler's `ret` jumps to (rt_sigreturn)
+};
+struct SigAltStack {     // 24 bytes
+    uint64_t ss_sp;      // stack base
+    int32_t  ss_flags;   // SS_ONSTACK=1, SS_DISABLE=2
+    int32_t  pad;
+    uint64_t ss_size;    // >= MINSIGSTKSZ (4 KiB)
+};
+struct SigInfo {         // 128 bytes, the SA_SIGINFO `siginfo_t`
+    int32_t  si_signo;   // 0
+    int32_t  si_errno;   // 4, always 0
+    int32_t  si_code;    // 8: SI_USER=0, SI_KERNEL=0x80, SI_TKILL=-6, SEGV_MAPERR=1, TRAP_BRKPT=1, BUS_ADRALN=1
+    int32_t  pad;        // 12
+    uint64_t payload;    // 16: si_pid|si_uid (u32+u32) for kill/tgkill, si_addr for a fault
+    int32_t  si_status;  // 24: SIGCHLD only (there is no child-exit producer, so 0)
+    uint8_t  pad1[100];  // 28..128
+};
+struct MContext {        // 264 bytes, inside ucontext_t
+    uint64_t gregs[32];  // x0..x31 in RISC-V numeric order (x0 = 0)
+    uint64_t pc;         // interrupted sepc
+};
+struct UContext {        // 288 bytes (pagh layout, this is not Linux's ucontext_t)
+    uint64_t flags;      // 0
+    uint64_t link;       // &ucontext of the previous frame, 0 outermost
+    uint64_t sigmask;    // blocked mask in force inside the handler
+    struct MContext mcontext;  // 24..288
+};
 // getdents64 entry: one record per directory entry, 8-byte aligned:
 struct Dirent { uint64 ino; uint8 kind; uint8 name_len; uint16 reserved;
                 char name[name_len]; /* then padding to 8 */ };
 ```
+
+`SigAction`, `SigAltStack`, `SigInfo` and `UContext` are the pagh-native layouts;
+they are deliberately **not** the Linux RISC-V ones. `rt_sigaction`'s `sigsetsize`
+is exactly 8 (a `u64` mask), signals are `1..=31` with `SIGKILL`/`SIGSTOP`
+unkillable, and a real handler must carry `SA_RESTORER` (`0x0400_0000`) plus an
+executable restorer. Accepted `SA_*` bits are exactly `SA_RESTORER`,
+`SA_ONSTACK=0x0800_0000`, `SA_RESTART=0x1000_0000`, `SA_NODEFER=0x4000_0000`,
+`SA_RESETHAND=0x8000_0000`, `SA_SIGINFO=0x4`; any other bit is `-EINVAL`.
+`rt_sigprocmask` how: `SIG_BLOCK=0`, `SIG_UNBLOCK=1`, `SIG_SETMASK=2`.
+
+`poll`/`ppoll` accept at most 64 `PollFd` entries (`nfds > 64` is `-EINVAL`);
+`timeout_ms == 0` scans once, a negative timeout waits, a zero return is a
+timeout (not an error), and every entry's `revents` is written on return.
 
 Flags: `O_RDONLY=0`, `O_WRONLY=1`, `O_RDWR=2`, `O_CREAT=0x40`,
 `O_TRUNC=0x80`, `O_APPEND=0x100`; `AT_REMOVEDIR=0x200` (the `unlinkat` flag).
@@ -275,12 +331,22 @@ The kernel implements one **active-open IPv4 TCP client** and userland
 
 ## 3. Errors
 
-`EPERM=1 ENOENT=2 EIO=5 EBADF=9 EAGAIN=11 ENOMEM=12 EACCES=13 EFAULT=14
-EEXIST=17 ENOTDIR=20 EISDIR=21 EINVAL=22 ENOSPC=28 EROFS=30 EPIPE=32
-ENOSYS=38 ENOTEMPTY=39 ENAMETOOLONG=36 ELOOP=40 EOVERFLOW=75 ENOTSOCK=88
-ENOPROTOOPT=92 ENOTSUP=95 EAFNOSUPPORT=97 ENETUNREACH=101 ECONNRESET=104
-EISCONN=106 ENOTCONN=107 ETIMEDOUT=110 ECONNREFUSED=111 EHOSTUNREACH=113
-EPROTO=71 EKEYREJECTED=129`.
+`EPERM=1 ENOENT=2 ESRCH=3 EINTR=4 EIO=5 E2BIG=7 ENOEXEC=8 EBADF=9
+ECHILD=10
+EAGAIN=11 ENOMEM=12 EACCES=13 EFAULT=14 EEXIST=17 ENOTDIR=20 EISDIR=21
+EINVAL=22 ENOSPC=28 EROFS=30 EPIPE=32 ENAMETOOLONG=36 ENOSYS=38
+ENOTEMPTY=39 ELOOP=40 EPROTO=71 EOVERFLOW=75 ENOTSOCK=88 EDESTADDRREQ=89
+EMSGSIZE=90 ENOPROTOOPT=92 ENOTSUP=95 EAFNOSUPPORT=97 EADDRINUSE=98
+EADDRNOTAVAIL=99 ENETUNREACH=101 ECONNRESET=104 EISCONN=106 ENOTCONN=107
+ETIMEDOUT=110 ECONNREFUSED=111 EHOSTUNREACH=113 EKEYREJECTED=129`.
+
+`ESRCH`, `EINTR`, `E2BIG`, `ENOEXEC`, `ECHILD`, `EDESTADDRREQ`, `EMSGSIZE`,
+`EADDRINUSE` and `EADDRNOTAVAIL` were already named by the syscall rows in §2
+(`kill`/`tgkill`, the blocking calls interrupted by a handler, `execve`
+— `E2BIG` is its over-long argv/envp refusal —, `wait4`, `bind` and `sendto`),
+and the kernel has always returned them; §3
+simply omitted their numbers. Recording them here is a documentation fix, not a
+new ABI shape: no existing number or semantic changed.
 
 `EPROTO` is a TLS handshake or record that did not follow TLS 1.3;
 `EKEYREJECTED` is the trust decision refusing the server — the chain does not
@@ -335,3 +401,9 @@ The one semantic addition to an *existing* shape is that `read`/`write`/`send`/
 `recv`/`poll`/`shutdown`/`close` now also accept a TLS descriptor; a descriptor
 that never had `tls_connect` on it behaves exactly as before, so the addition is
 backward compatible.
+
+The §3 error list is additive in the same way. The numbers added in the 0.6.1
+documentation fix (`ESRCH`, `EINTR`, `E2BIG`, `ENOEXEC`, `ECHILD`,
+`EDESTADDRREQ`, `EMSGSIZE`, `EADDRINUSE`, `EADDRNOTAVAIL`) were always
+returned by the kernel;
+listing them changes no syscall's behaviour and `base_version` stays 1.

@@ -20,10 +20,22 @@ pub enum Errno {
     EPERM = 1,
     /// No such file or directory.
     ENOENT = 2,
+    /// No such process: `kill`/`tgkill` named a pid or thread that does not
+    /// exist.
+    ESRCH = 3,
+    /// Interrupted system call: a blocking wait returned early because a signal
+    /// handler is about to run. The caller decides whether to restart it.
+    EINTR = 4,
     /// I/O error.
     EIO = 5,
+    /// Argument list too long: `execve` was given an over-long argv/envp.
+    E2BIG = 7,
+    /// Exec format error: `execve` was given an image the kernel cannot load.
+    ENOEXEC = 8,
     /// Bad file descriptor.
     EBADF = 9,
+    /// No child processes: `wait4` found no child of the caller to reap.
+    ECHILD = 10,
     /// Resource temporarily unavailable (notably `read(0)` with no queued byte).
     EAGAIN = 11,
     /// Cannot allocate memory.
@@ -52,10 +64,19 @@ pub enum Errno {
     ENOTEMPTY = 39,
     /// A socket operation on a non-socket descriptor.
     ENOTSOCK = 88,
+    /// Destination address required: `sendto` on a UDP socket needs a peer.
+    EDESTADDRREQ = 89,
+    /// Message too long: a UDP payload above the ABI's 1024-byte limit.
+    EMSGSIZE = 90,
     /// Protocol option not recognized.
     ENOPROTOOPT = 92,
     /// Address family not supported (the ABI has only `AF_INET`).
     EAFNOSUPPORT = 97,
+    /// Address already in use: `bind` on a port another socket owns.
+    EADDRINUSE = 98,
+    /// Cannot assign requested address: `bind` to an address this interface
+    /// does not hold.
+    EADDRNOTAVAIL = 99,
     /// Network is unreachable (no DHCP lease or no route).
     ENETUNREACH = 101,
     /// Connection reset by peer.
@@ -99,8 +120,13 @@ impl Errno {
         match raw {
             1 => Self::EPERM,
             2 => Self::ENOENT,
+            3 => Self::ESRCH,
+            4 => Self::EINTR,
             5 => Self::EIO,
+            7 => Self::E2BIG,
+            8 => Self::ENOEXEC,
             9 => Self::EBADF,
+            10 => Self::ECHILD,
             11 => Self::EAGAIN,
             12 => Self::ENOMEM,
             13 => Self::EACCES,
@@ -115,8 +141,12 @@ impl Errno {
             39 => Self::ENOTEMPTY,
             32 => Self::EPIPE,
             88 => Self::ENOTSOCK,
+            89 => Self::EDESTADDRREQ,
+            90 => Self::EMSGSIZE,
             92 => Self::ENOPROTOOPT,
             97 => Self::EAFNOSUPPORT,
+            98 => Self::EADDRINUSE,
+            99 => Self::EADDRNOTAVAIL,
             101 => Self::ENETUNREACH,
             104 => Self::ECONNRESET,
             106 => Self::EISCONN,
@@ -147,8 +177,13 @@ impl Errno {
         match self {
             Self::EPERM => "Operation not permitted",
             Self::ENOENT => "No such file or directory",
+            Self::ESRCH => "No such process",
+            Self::EINTR => "Interrupted system call",
             Self::EIO => "I/O error",
+            Self::E2BIG => "Argument list too long",
+            Self::ENOEXEC => "Exec format error",
             Self::EBADF => "Bad file descriptor",
+            Self::ECHILD => "No child processes",
             Self::EAGAIN => "Resource temporarily unavailable",
             Self::ENOMEM => "Cannot allocate memory",
             Self::EACCES => "Permission denied",
@@ -163,8 +198,12 @@ impl Errno {
             Self::ENOTEMPTY => "Directory not empty",
             Self::EPIPE => "Broken pipe",
             Self::ENOTSOCK => "Socket operation on non-socket",
+            Self::EDESTADDRREQ => "Destination address required",
+            Self::EMSGSIZE => "Message too long",
             Self::ENOPROTOOPT => "Protocol option not available",
             Self::EAFNOSUPPORT => "Address family not supported",
+            Self::EADDRINUSE => "Address already in use",
+            Self::EADDRNOTAVAIL => "Cannot assign requested address",
             Self::ENETUNREACH => "Network is unreachable",
             Self::ECONNRESET => "Connection reset by peer",
             Self::EISCONN => "Transport endpoint is already connected",
@@ -217,13 +256,58 @@ pub(crate) fn check(ret: isize) -> Result<usize> {
 mod tests {
     use super::*;
 
+    /// Every number in `docs/abi.md` §3, in the order the document lists it.
+    const DOCUMENTED: [(i32, Errno); 42] = [
+        (1, Errno::EPERM),
+        (2, Errno::ENOENT),
+        (3, Errno::ESRCH),
+        (4, Errno::EINTR),
+        (5, Errno::EIO),
+        (7, Errno::E2BIG),
+        (8, Errno::ENOEXEC),
+        (9, Errno::EBADF),
+        (10, Errno::ECHILD),
+        (11, Errno::EAGAIN),
+        (12, Errno::ENOMEM),
+        (13, Errno::EACCES),
+        (14, Errno::EFAULT),
+        (17, Errno::EEXIST),
+        (20, Errno::ENOTDIR),
+        (21, Errno::EISDIR),
+        (22, Errno::EINVAL),
+        (28, Errno::ENOSPC),
+        (30, Errno::EROFS),
+        (32, Errno::EPIPE),
+        (36, Errno::ENAMETOOLONG),
+        (38, Errno::ENOSYS),
+        (39, Errno::ENOTEMPTY),
+        (40, Errno::ELOOP),
+        (71, Errno::EPROTO),
+        (75, Errno::EOVERFLOW),
+        (88, Errno::ENOTSOCK),
+        (89, Errno::EDESTADDRREQ),
+        (90, Errno::EMSGSIZE),
+        (92, Errno::ENOPROTOOPT),
+        (95, Errno::ENOTSUP),
+        (97, Errno::EAFNOSUPPORT),
+        (98, Errno::EADDRINUSE),
+        (99, Errno::EADDRNOTAVAIL),
+        (101, Errno::ENETUNREACH),
+        (104, Errno::ECONNRESET),
+        (106, Errno::EISCONN),
+        (107, Errno::ENOTCONN),
+        (110, Errno::ETIMEDOUT),
+        (111, Errno::ECONNREFUSED),
+        (113, Errno::EHOSTUNREACH),
+        (129, Errno::EKEYREJECTED),
+    ];
+
     #[test]
     fn round_trips_documented_numbers() {
-        for raw in [
-            1, 2, 5, 9, 11, 12, 13, 14, 17, 20, 21, 22, 28, 30, 38, 39, 36, 40, 75, 95, 32, 88, 92,
-            97, 101, 104, 106, 107, 110, 111, 113,
-        ] {
-            assert_eq!(Errno::from_raw(raw).raw(), raw);
+        for (raw, error) in DOCUMENTED {
+            assert_eq!(Errno::from_raw(raw), error);
+            assert_eq!(error.raw(), raw);
+            assert!(!error.as_str().is_empty());
         }
     }
 
