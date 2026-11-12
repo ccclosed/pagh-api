@@ -362,9 +362,11 @@ protocol broke".
 * `alloc`: a bump allocator on `brk`; `alloc::vec::Vec`, `String`, `format!` work.
 * `print!`/`println!` write to fd 1; `eprint!` to fd 2.
 * `fs`: `File::open`, `File::create`, `File::set_len`, `read_to_end`,
-  `read_to_string`, `write_all`, `create_dir`, `create_dir_all`, `remove_file`,
-  `remove_dir`, `rename`, `hard_link`, `symlink`, `truncate`, `set_permissions`,
-  `Dir::open`, iterator over `DirEntry`/`EntryKind`, `fs::read_link`, `fs::stat`.
+  `read_to_string`, `write`/`write_all`, `create_dir`, `create_dir_all`,
+  `remove_file`, `remove_dir`, `rename`, `hard_link`, `symlink`, `truncate`,
+  `set_permissions`, `Dir::open`, `read_dir` (std-shaped iterator over
+  `DirEntry`: `file_name`, `path`, `file_type`, `metadata`), `fs::read_link`,
+  `fs::stat`.
 * `env`: `args()` (with `argv[0]`), `env("PWD")`, `path::resolve` for relative paths.
 * `io`: `Read`, `Write`, `Seek` traits and `Stdin`, `Stdout`.
 * `net`: `Ipv4` (literal, `Ipv4::parse`) and `TcpStream::connect(host, port)`

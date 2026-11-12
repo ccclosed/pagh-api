@@ -11,7 +11,9 @@ runs without a network or a cross toolchain:
   * every `O_*`/`AT_*` flag in doc §2 matches `libpagh/src/sys.rs`;
   * the documented structure sizes (`Stat`, `Timespec`, `Uname`, `SockAddrIn`,
     `PollFd`, `SigAction`, `SigAltStack`, `SigInfo`, `MContext`, `UContext`)
-    match the compile-time assertions in `libpagh/src/abi.rs`.
+    match the compile-time assertions in `libpagh/src/abi.rs`;
+  * every `fs` API named in `docs/abi.md` §4 exists in `libpagh/src/fs.rs`
+    (a docs→code check: the contract may not name a helper the crate lacks).
 
 Exit code 0 on agreement, 1 on any drift, 2 when a file/pattern is missing
 (which means the contract or the parser moved and a human must look).
@@ -28,6 +30,7 @@ ABI_MD = ROOT / "docs" / "abi.md"
 SYS_RS = ROOT / "libpagh" / "src" / "sys.rs"
 ERRNO_RS = ROOT / "libpagh" / "src" / "errno.rs"
 ABI_RS = ROOT / "libpagh" / "src" / "abi.rs"
+FS_RS = ROOT / "libpagh" / "src" / "fs.rs"
 
 
 class Drift(Exception):
@@ -163,6 +166,45 @@ def documented_struct_sizes(doc: str) -> dict[str, int]:
     return sizes
 
 
+def documented_fs_items(doc: str) -> list[str]:
+    """The `fs` API names listed in the §4 runtime bullet.
+
+    The bullet uses shorthand (`File::open/create`, `write`/`write_all`), so
+    every backticked token is split on `/` and reduced to its last `::`
+    segment: `File::open` names `open`, `fs::read_link` names `read_link`.
+    That is the name `libpagh/src/fs.rs` must contain (as a function, method,
+    type or re-export).
+    """
+    runtime = section(doc, "## 4. Runtime")
+    match = re.search(r"^\* `fs`:(?P<body>.*?)(?=^\* )", runtime, re.M | re.S)
+    if not match:
+        raise SystemExit("check_abi: the `fs` bullet in docs/abi.md §4 not found")
+    items: list[str] = []
+    for token in re.findall(r"`([^`]+)`", match.group("body")):
+        if token == "fs":  # the module name itself
+            continue
+        for part in token.split("/"):
+            name = part.split("::")[-1].strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                items.append(name)
+    if not items:
+        raise SystemExit("check_abi: no fs API names parsed from docs/abi.md §4")
+    return items
+
+
+def check_fs_surface(doc: str, errors: list[str]) -> int:
+    """Every fs helper the contract names must exist in fs.rs (docs -> code)."""
+    source = read(FS_RS)
+    items = documented_fs_items(doc)
+    for name in items:
+        if not re.search(rf"\b{re.escape(name)}\b", source):
+            errors.append(
+                f"fs API: docs/abi.md §4 names `{name}` but libpagh/src/fs.rs "
+                "does not mention it"
+            )
+    return len(items)
+
+
 def compare(label: str, doc: dict[str, int], rust: dict[str, int], errors: list[str]) -> None:
     for name in sorted(set(doc) | set(rust)):
         if name not in rust:
@@ -197,6 +239,8 @@ def main() -> int:
     doc_sizes = documented_struct_sizes(doc)
     sizes_impl = rust_struct_sizes(read(ABI_RS))
     compare("struct size", doc_sizes, sizes_impl, errors)
+
+    fs_items = check_fs_surface(doc, errors)
 
     # Sanity: the numbers above are only useful if the table is the real one.
     expected = {
@@ -289,7 +333,8 @@ def main() -> int:
     print(
         "ABI check OK: "
         f"{len(doc_sys)} syscalls, {len(doc_errno)} errnos, "
-        f"{len(doc_flags)} open flags, {len(doc_sizes)} struct sizes"
+        f"{len(doc_flags)} open flags, {len(doc_sizes)} struct sizes, "
+        f"{fs_items} fs items"
     )
     return 0
 

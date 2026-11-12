@@ -8,6 +8,11 @@
 //!
 //! Every path-taking function resolves relative names against `PWD` first,
 //! because the kernel accepts absolute paths only ([`crate::path::resolve`]).
+//!
+//! Directories come in the two shapes the rest of the API uses: [`Dir`] is the
+//! raw `getdents64` iterator, [`read_dir`] is the std-shaped entry point over
+//! it (both yield [`DirEntry`], which knows its own full [`path`](DirEntry::path),
+//! `file_name` and `file_type`).
 
 use alloc::string::String;
 use alloc::vec;
@@ -310,15 +315,17 @@ pub fn read_link(path: &str) -> Result<String> {
     }
 }
 
-/// A directory entry returned by [`Dir`].
+/// A directory entry returned by [`Dir`] or [`read_dir`].
 ///
-/// The name is decoded lossily: the ABI does not promise UTF-8 names, and a
-/// listing should still show a non-UTF-8 byte as U+FFFD rather than abort.
+/// The kind comes from the `getdents64` record, so [`file_type`](Self::file_type)
+/// never performs a syscall; [`metadata`](Self::metadata) does (`stat`), and —
+/// like `stat(2)` — follows a symbolic link.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirEntry {
     ino: u64,
     kind: EntryKind,
     name: String,
+    path: String,
 }
 
 impl DirEntry {
@@ -327,15 +334,55 @@ impl DirEntry {
         self.ino
     }
 
-    /// The entry's kind.
+    /// The entry's kind, as recorded by the kernel in the `getdents64` record.
     pub fn kind(&self) -> EntryKind {
         self.kind
     }
 
-    /// The entry's name (no path, no NUL).
+    /// The entry's name (no directory part, no NUL).
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    /// The entry's name, std-shaped alias for [`name`](Self::name).
+    pub fn file_name(&self) -> &str {
+        &self.name
+    }
+
+    /// The full path of the entry: the directory passed to [`read_dir`] (or
+    /// [`Dir::open`]) joined with the name. It is absolute, because every
+    /// path-taking API resolves against `PWD` first.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// The entry's kind, std-shaped alias for [`kind`](Self::kind).
+    pub fn file_type(&self) -> EntryKind {
+        self.kind
+    }
+
+    /// Metadata for the entry (`stat`), following a final symbolic link.
+    ///
+    /// This is the one [`DirEntry`] accessor that touches the filesystem; the
+    /// kind is already in the directory record. A broken link is `ENOENT`.
+    pub fn metadata(&self) -> Result<Stat> {
+        stat(&self.path)
+    }
+}
+
+/// Join a directory path and one entry name.
+///
+/// The directory is already resolved and normalized by [`path::resolve`], and
+/// the name is a single component, so a lexical join is exact; the root
+/// directory does not get a doubled slash.
+fn entry_path(dir: &str, name: &str) -> String {
+    let mut path = String::with_capacity(dir.len() + 1 + name.len());
+    path.push_str(dir);
+    if !path.ends_with('/') {
+        path.push('/');
+    }
+    path.push_str(name);
+    path
 }
 
 /// An open directory being read with `getdents64`.
@@ -344,6 +391,7 @@ impl DirEntry {
 /// decision for the applet (`ls`), not for the filesystem layer.
 pub struct Dir {
     fd: i32,
+    path: String,
     buf: Vec<u8>,
     start: usize,
     end: usize,
@@ -357,15 +405,22 @@ impl Dir {
     /// kernel must allow `O_RDONLY` opens of directories for `getdents64` to
     /// be usable at all (listed in the README as an assumption).
     pub fn open(path: &str) -> Result<Dir> {
-        let file = File::open(path)?;
+        let absolute = path::resolve(path);
+        let file = File::open(&absolute)?;
         let fd = file.into_raw_fd();
         Ok(Dir {
             fd,
+            path: absolute,
             buf: vec![0u8; 4096],
             start: 0,
             end: 0,
             done: false,
         })
+    }
+
+    /// The absolute directory path this iterator was opened for.
+    pub fn path(&self) -> &str {
+        &self.path
     }
 
     /// Parse one record from the current buffer.
@@ -421,9 +476,15 @@ impl Dir {
         let kind = EntryKind::from_raw(record[8] as u32);
         let name = String::from_utf8_lossy(&record[DIRENT_HEADER..DIRENT_HEADER + name_len])
             .into_owned();
+        let path = entry_path(&self.path, &name);
 
         self.start = start + size;
-        Some(Ok(DirEntry { ino, kind, name }))
+        Some(Ok(DirEntry {
+            ino,
+            kind,
+            name,
+            path,
+        }))
     }
 }
 
@@ -441,6 +502,42 @@ impl Drop for Dir {
             let _ = sys::close(self.fd);
         }
     }
+}
+
+/// The std-shaped iterator returned by [`read_dir`].
+///
+/// It owns the directory descriptor (closing it on drop) and yields one
+/// [`DirEntry`] per `getdents64` record. A read or framing error is yielded
+/// once as `Err` and then ends the iterator, exactly like [`Dir`].
+pub struct ReadDir {
+    dir: Dir,
+}
+
+impl ReadDir {
+    /// The absolute directory path being listed.
+    pub fn path(&self) -> &str {
+        self.dir.path()
+    }
+}
+
+impl Iterator for ReadDir {
+    type Item = Result<DirEntry>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.dir.parse_one()
+    }
+}
+
+/// List the entries of the directory `path` (std-shaped `fs::read_dir`).
+///
+/// `path` is resolved against `PWD`; the returned iterator yields
+/// `Result<DirEntry>` values, with the same `.`/`..` policy as [`Dir`]. Like
+/// the rest of this module it is a thin layer over `getdents64` — no separate
+/// `opendir` syscall exists in the ABI.
+pub fn read_dir(path: &str) -> Result<ReadDir> {
+    Ok(ReadDir {
+        dir: Dir::open(path)?,
+    })
 }
 
 // Re-exported so `fs::EntryKind` is available next to `DirEntry` without

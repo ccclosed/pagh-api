@@ -50,6 +50,21 @@ impl EntryKind {
     pub const fn raw(self) -> u32 {
         self as u32
     }
+
+    /// True for a directory.
+    pub const fn is_dir(self) -> bool {
+        matches!(self, Self::Dir)
+    }
+
+    /// True for a regular file.
+    pub const fn is_file(self) -> bool {
+        matches!(self, Self::File)
+    }
+
+    /// True for a symbolic link.
+    pub const fn is_symlink(self) -> bool {
+        matches!(self, Self::Symlink)
+    }
 }
 
 impl Stat {
