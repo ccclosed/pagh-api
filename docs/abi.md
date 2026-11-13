@@ -367,6 +367,13 @@ protocol broke".
   `set_permissions`, `Dir::open`, `read_dir` (std-shaped iterator over
   `DirEntry`: `file_name`, `path`, `file_type`, `metadata`), `fs::read_link`,
   `fs::stat`.
+* `process`: `Command::new`, `arg`/`args`, `env`/`env_clear`, `spawn`,
+  `status`, `Child::id`/`Child::wait`/`Child::try_wait`,
+  `ExitStatus::code`/`ExitStatus::signal`/`ExitStatus::success` — a lite
+  `std::process::Command` over `fork` + `execve` + `wait4`. No piped
+  stdin/stdout, no PATH search and no cross-process kill (the ABI's kill
+  resolves only inside the calling run); `execve` errors exit the child with
+  127 after a message on fd 2 (the shell convention).
 * `env`: `args()` (with `argv[0]`), `env("PWD")`, `path::resolve` for relative paths.
 * `io`: `Read`, `Write`, `Seek` traits and `Stdin`, `Stdout`.
 * `net`: `Ipv4` (literal, `Ipv4::parse`) and `TcpStream::connect(host, port)`

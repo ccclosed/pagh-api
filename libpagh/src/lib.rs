@@ -24,8 +24,9 @@
 //!
 //! # Not provided
 //!
-//! Threads and futexes exist ([`thread`]); fork, signals and dynamic linking
-//! do not. Sockets are a connected IPv4 TCP client ([`net::TcpStream`]), a TCP
+//! Threads and futexes exist ([`thread`]); a child process is
+//! `fork` + `execve` + `wait4` wrapped by [`process::Command`]; signals and
+//! dynamic linking do not. Sockets are a connected IPv4 TCP client ([`net::TcpStream`]), a TCP
 //! listener ([`net::TcpListener`]) and bound UDP datagram sockets
 //! ([`net::UdpSocket`]); [`dns`] resolves `A` records over one of those UDP
 //! sockets, and [`tls::TlsStream`] puts a kernel-verified TLS 1.3 session on a
@@ -52,6 +53,7 @@ pub mod io;
 pub mod net;
 pub mod path;
 pub mod print;
+pub mod process;
 pub mod random;
 mod rt;
 pub mod sync;
