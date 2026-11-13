@@ -38,6 +38,14 @@ docs/live-canonicalize.txt живой QEMU-транскрипт examples/canonic
 tools/check_abi.py   сверка docs/abi.md с sys.rs/errno.rs/abi.rs (+ §4 fs/process/path/io)
 ```
 
+## Ветки и релизы
+
+`main` — стабильная ветка, `dev` — экспериментальная интеграционная. PR с
+фичами и исправлениями идут в `dev`; стабильные релизы тегируются с `main`,
+release-кандидаты и pre-release — с `dev` (`vX.Y.Z-rc.N`). Release-workflow
+отказывается от тега, снятого не с той ветки. Подробнее —
+[BRANCHING.md](BRANCHING.md).
+
 ## Сборка
 
 Тулчейн закреплён в [`rust-toolchain.toml`](rust-toolchain.toml) — тот же
