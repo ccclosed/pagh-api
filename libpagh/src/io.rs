@@ -2,7 +2,9 @@
 //!
 //! The traits are deliberately tiny: one syscall per method, errors are
 //! [`Errno`], no buffering layer and no `std::io` compatibility. `File`,
-//! `Stdin`, `Stdout` and `Stderr` implement them.
+//! `Stdin`, `Stdout` and `Stderr` implement them, and [`stdin`], [`stdout`]
+//! and [`stderr`] return the console handles (std-shaped names; the handles
+//! are copyable markers, not locked globals).
 //!
 //! `EAGAIN` is **not** retried here. It is returned to the caller because
 //! `read(0)` uses it to mean "no byte is queued yet" (`docs/abi.md` §2); the
@@ -106,6 +108,22 @@ impl Stdin {
     pub const fn new() -> Self {
         Self
     }
+}
+
+/// A reader for fd 0 (std-shaped `io::stdin()`; the handle is a copyable
+/// marker, so unlike std there is no global handle to lock).
+pub const fn stdin() -> Stdin {
+    Stdin
+}
+
+/// A writer for fd 1.
+pub const fn stdout() -> Stdout {
+    Stdout
+}
+
+/// A writer for fd 2.
+pub const fn stderr() -> Stderr {
+    Stderr
 }
 
 impl Stdout {

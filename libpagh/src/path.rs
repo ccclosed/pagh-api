@@ -140,6 +140,72 @@ pub fn dirname(path: &str) -> &str {
     }
 }
 
+/// The last component of `path`, or `None` for `/`, an empty path and paths
+/// whose last component is `.`/`..` (the std `Path::file_name` rule).
+///
+/// This is `basename` with the "no name" cases made explicit; the applet that
+/// wants `basename(1)` policy keeps using [`basename`].
+pub fn file_name(path: &str) -> Option<&str> {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+    let name = match trimmed.rfind('/') {
+        Some(index) => &trimmed[index + 1..],
+        None => trimmed,
+    };
+    if name.is_empty() || name == "." || name == ".." {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// The extension of the last component, without the dot, following the std
+/// rule: a leading dot does not start an extension and a trailing dot gives
+/// `Some("")`.
+pub fn extension(path: &str) -> Option<&str> {
+    let name = file_name(path)?;
+    let dot = name.rfind('.')?;
+    if dot == 0 {
+        return None;
+    }
+    Some(&name[dot + 1..])
+}
+
+/// The parent directory of `path`, or `None` for `/` and the empty path.
+///
+/// Unlike [`dirname`] (which always returns a string and uses `.` for
+/// relative names), this is the std-shaped `Option`: `parent("/a/b")` is
+/// `Some("/a")`, `parent("a")` is `Some("")`, `parent("/")` is `None`.
+pub fn parent(path: &str) -> Option<&str> {
+    if path.is_empty() || path == "/" {
+        return None;
+    }
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+    match trimmed.rfind('/') {
+        None => Some(""),
+        Some(0) => Some("/"),
+        Some(index) => Some(&trimmed[..index]),
+    }
+}
+
+/// True when `path` starts with the components of `base` (std
+/// `Path::starts_with`, component-wise: `/a/bc` does not start with `/a/b`).
+pub fn starts_with(path: &str, base: &str) -> bool {
+    let path_absolute = path.starts_with('/');
+    let base_absolute = base.starts_with('/');
+    if path_absolute != base_absolute {
+        return false;
+    }
+    let path_parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    let base_parts: Vec<&str> = base.split('/').filter(|part| !part.is_empty()).collect();
+    base_parts.len() <= path_parts.len() && path_parts[..base_parts.len()] == base_parts[..]
+}
+
 /// An owned path with lexical `normalize`/`resolve`/`join`.
 ///
 /// A thin convenience over the free functions; it stores the path as the
@@ -190,6 +256,32 @@ impl Path {
     /// See [`basename`].
     pub fn basename(&self) -> &str {
         basename(&self.inner)
+    }
+
+    /// See [`file_name`].
+    pub fn file_name(&self) -> Option<&str> {
+        file_name(&self.inner)
+    }
+
+    /// See [`extension`].
+    pub fn extension(&self) -> Option<&str> {
+        extension(&self.inner)
+    }
+
+    /// See [`parent`].
+    pub fn parent(&self) -> Option<&str> {
+        parent(&self.inner)
+    }
+
+    /// See [`starts_with`].
+    pub fn starts_with(&self, base: &str) -> bool {
+        starts_with(&self.inner, base)
+    }
+
+    /// Resolve every symbolic link and return the absolute canonical path;
+    /// see [`crate::fs::canonicalize`].
+    pub fn canonicalize(&self) -> crate::errno::Result<Path> {
+        crate::fs::canonicalize(&self.inner).map(Path::new)
     }
 
     /// See [`dirname`].

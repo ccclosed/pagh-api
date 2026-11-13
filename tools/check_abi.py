@@ -12,9 +12,9 @@ runs without a network or a cross toolchain:
   * the documented structure sizes (`Stat`, `Timespec`, `Uname`, `SockAddrIn`,
     `PollFd`, `SigAction`, `SigAltStack`, `SigInfo`, `MContext`, `UContext`)
     match the compile-time assertions in `libpagh/src/abi.rs`;
-  * every `fs` and `process` API named in `docs/abi.md` §4 exists in the
-    corresponding `libpagh/src/*.rs` module (a docs→code check: the contract
-    may not name a helper the crate lacks).
+  * every `fs`, `process`, `path` and `io` API named in `docs/abi.md` §4
+    exists in the corresponding `libpagh/src/*.rs` module (a docs→code check:
+    the contract may not name a helper the crate lacks).
 
 Exit code 0 on agreement, 1 on any drift, 2 when a file/pattern is missing
 (which means the contract or the parser moved and a human must look).
@@ -33,11 +33,15 @@ ERRNO_RS = ROOT / "libpagh" / "src" / "errno.rs"
 ABI_RS = ROOT / "libpagh" / "src" / "abi.rs"
 FS_RS = ROOT / "libpagh" / "src" / "fs.rs"
 PROCESS_RS = ROOT / "libpagh" / "src" / "process.rs"
+PATH_RS = ROOT / "libpagh" / "src" / "path.rs"
+IO_RS = ROOT / "libpagh" / "src" / "io.rs"
 
 # The §4 runtime bullets this script cross-checks: module name -> source file.
 RUNTIME_SURFACES = (
     ("fs", FS_RS),
     ("process", PROCESS_RS),
+    ("path", PATH_RS),
+    ("io", IO_RS),
 )
 
 
@@ -352,7 +356,9 @@ def main() -> int:
         f"{len(doc_sys)} syscalls, {len(doc_errno)} errnos, "
         f"{len(doc_flags)} open flags, {len(doc_sizes)} struct sizes, "
         f"{surface_counts['fs']} fs items, "
-        f"{surface_counts['process']} process items"
+        f"{surface_counts['process']} process items, "
+        f"{surface_counts['path']} path items, "
+        f"{surface_counts['io']} io items"
     )
     return 0
 
