@@ -5,50 +5,57 @@
 | Branch | Role | Rules |
 |---|---|---|
 | `main` | **Stable.** What users build, package and release. | Only release merges from `dev` (or a hotfix PR) land here. CI must be green. |
-| `dev` | **Experimental integration.** Next release lives here and may be broken between commits. | Feature/fix PRs target `dev`. CI must be green before merge. |
+| `dev` | **Experimental integration.** The next release lives here and may be broken between commits. | Feature/fix PRs target `dev`. CI must be green before merge. |
 | `feat/*`, `fix/*`, `security/*` | Short-lived work branches. | Branch from `dev`, PR back to `dev`, delete after merge. |
+| `hotfix/*` | Emergency fix for a released version. | Branch from `main`, PR to `main`; only critical/high verified security or a release-blocking regression. |
 
 `main` and `dev` are both protected in spirit: no direct pushes of code, no
 force-pushes, CI green before merge. Tagging and release publication are
 maintainer actions.
 
-CI covers both branches: `ci.yml` runs on every push and pull request with no
-branch filter (`on: [push, pull_request]`), so a push to `dev` gets the same
-build and ABI-drift gates as `main`. `release.yml` runs only for version tags.
+CI covers both branches: `ci.yml` runs on every push and pull request
+(`on: [push, pull_request]`), so a push to `dev` gets the same build and
+ABI-drift gates as `main`. `release.yml` runs only for version tags.
 
 ## Release flow
 
 1. **Feature / fix PR** → `dev`. CI runs the same gates as for `main`.
-2. **Pre-release** (optional but recommended): tag a validated `dev` commit
-   `vX.Y.Z-rc.N` (or `-pre.N` for an experimental snapshot) and push the tag.
+2. **Pre-release**: freeze `dev` and tag a validated `dev` commit
+   `vX.Y.Z-rc.N` (release candidates only; there is no `-pre.N` channel) and
+   push the tag. After `-rc.1` only stabilisation fixes land in `dev`.
    `.github/workflows/release.yml` publishes it as a **GitHub pre-release**
    (GitHub marks it "Pre-release"; package tooling must ignore it unless the
    user opts in).
 3. **Stabilisation**: once `dev` is release-ready, merge `dev` → `main` (merge
    commit or fast-forward, no code changes beyond release metadata).
 4. **Stable release**: tag the merge commit `vX.Y.Z` on `main`; the release
-   workflow publishes a full GitHub release with generated notes and (where the
-   repository builds one) the release artifact.
-5. **Hotfix**: branch from `main`, PR to `main`, tag a PATCH version; afterwards
-   merge `main` back into `dev` so the next release does not regress the fix.
+   workflow publishes a full GitHub release with generated notes and the source
+   archive plus a matching `.sha256` (pagh-api ships SDK source; consumers build
+   it against their pinned toolchain).
+5. **Hotfix**: branch from `main`, PR to `main` with full CI plus a targeted
+   regression test, tag a PATCH version **straight to stable** (no RC), then
+   merge `main` back into `dev` with `--no-ff`; `dev` keeps the higher version
+   (`libpagh/Cargo.toml` + `Cargo.lock`) and README release sections merge
+   additively.
 
 ## Tag conventions
 
 | Tag | Cut from | GitHub release type |
 |---|---|---|
-| `vX.Y.Z` (or bare `X.Y.Z` where historically used) | `main` | Release |
-| `vX.Y.Z-rc.N` | `dev` | Pre-release |
-| `vX.Y.Z-pre.N` | `dev` | Pre-release |
+| `vX.Y.Z` | `main` | Release |
+| `vX.Y.Z-rc.N` | `dev` (must not already be on `main`) | Pre-release |
 
-The version source of truth is `libpagh/Cargo.toml` (`version = "0.9.0"`,
-mirrored in `Cargo.lock`); a tag must match it, for example `v0.9.0`. The root
-`Cargo.toml` is a virtual workspace manifest and carries no version. The
-release workflow checks ancestry, not the version string — the version bump and
-the tag are made in the same release step by a maintainer.
+New tags always carry the `v` prefix (`vX.Y.Z`, `vX.Y.Z-rc.N`); old bare-numeric
+tags remain as history. The version source of truth is `libpagh/Cargo.toml`
+(currently `0.9.0`, mirrored in `Cargo.lock`); the root `Cargo.toml` is a
+virtual workspace manifest and carries no version. `dev` carries the next
+release version, `main` the last released one. The release workflow checks both
+the tag's branch (stable: `main`; RC: `dev` only) and that the tag base equals
+the `libpagh` version. The operational checklist is in `RELEASING.md`.
 
 ## Why two branches
 
-`main` stays reproducible for users and downstream repositories (whose Cargo
-dependencies or packaged kernels point at releases). `dev` lets integration
-work — multi-repo changes, experimental features, unfinished migrations — land
-and be tested continuously without making `main` unstable.
+`main` stays reproducible for users and downstream repositories (their pinned
+Cargo dependencies, programs and packaged kernels point at releases). `dev` lets
+integration work — multi-repo changes, experimental features, unfinished
+migrations — land and be tested continuously without making `main` unstable.
